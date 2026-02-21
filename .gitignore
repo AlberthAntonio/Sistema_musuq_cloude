@@ -1,0 +1,61 @@
+# === Artefactos de Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+*.log
+
+# Entornos virtuales
+# En la raíz
+.venv/
+venv/
+env/
+ENV/
+# En subcarpetas específicas
+backend/.venv/
+desktop/.venv/
+
+# Configuración/editor
+.vscode/
+.idea/
+*.code-workspace
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos temporales y de backup
+*.tmp
+*.swp
+*.swo
+*~
+
+# Archivos de prueba/manuales
+Pruebas/
+
+# Datos locales / salidas
+*.sqlite3
+*.db
+*.sqlite
+*.csv
+session.json
+desktop/local_data/
+
+# Build / dist genéricos
+build/
+dist/
+
+# Carpetas específicas del proyecto que no deberían ir a Git (ajusta según necesites)
+backend/__pycache__/
+desktop/__pycache__/
+app_referencia_visualizacion/__pycache__/
+.agent/
+
+# Variables de entorno (mantener solo .env.example)
+.env
+
+# Ignorar archivos de inicialización locales
+INICIALIZADOR_APLICACION.py
+RESUMEN_VISUAL.txt

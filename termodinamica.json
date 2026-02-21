@@ -1,0 +1,96 @@
+{
+  "titulo_boletin": "FÍSICA - TERMODINÁMICA",
+  "subtitulo": "NIVEL PREUNIVERSITARIO - CAPÍTULO 28",
+  "institucion": "Academia Preuniversitaria",
+  "fecha": "Ciclo 2025-I",
+  "teoria": {
+    "titulo": "Conceptos Fundamentales",
+    "contenido": "<strong>Termodinámica:</strong> Trata acerca de la transformación de energía térmica en energía mecánica y el proceso inverso. <br><br><strong>Sistema Termodinámico:</strong> Es aquella porción de materia que puede considerarse limitada por una superficie cerrada real o imaginaria.<br><br><strong>Estado Termodinámico:</strong> Para un gas ideal, es una situación específica definida por sus propiedades (P, V, T).",
+    "formulas": [
+      {
+        "ecuacion": "PV = nRT",
+        "descripcion": "Ecuación de Estado de los Gases Ideales"
+      },
+      {
+        "ecuacion": "\\Delta U = Q - W",
+        "descripcion": "Primera Ley de la Termodinámica"
+      }
+    ]
+  },
+  "problemas": [
+    {
+      "pregunta": "Un motor de 2kW tiene en su eje una hélice que puede agitar a un gas ideal encerrado por un émbolo de masa despreciable unido a un resorte de rigidez K=100kN/m. ¿Durante cuánto tiempo debemos hacer funcionar el motor para que el émbolo se eleve lentamente 20cm? (El gas incrementó su energía interna en 38kJ).",
+      "datos": "Potencia = 2kW, K = 100 kN/m, d = 20cm, ΔU = 38kJ",
+      "diagram_type": "piston",
+      "diagram_params": {
+        "pressure": 1.5,
+        "volume": 4.0,
+        "temperature": 300,
+        "filename": "prob_17_motor"
+      },
+      "diagram_caption": "Esquema del Problema 17 (Motor + Resorte)",
+      "opciones": [
+        {"letra": "A", "texto": "10 s"},
+        {"letra": "B", "texto": "15 s"},
+        {"letra": "C", "texto": "20 s"},
+        {"letra": "D", "texto": "25 s"},
+        {"letra": "E", "texto": "30 s"}
+      ],
+      "respuesta_correcta": "C"
+    },
+    {
+      "pregunta": "En la figura, el ventilador realiza un trabajo de 540J. Al expandirse el gas disipa 130J de calor y su energía interna varía en 100J. ¿Qué trabajo neto realiza el gas sobre el entorno?",
+      "datos": "W_ventilador = -540J, Q = -130J, ΔU = 100J",
+      "diagram_type": "piston",
+      "diagram_params": {
+        "pressure": 2.0,
+        "volume": 2.5,
+        "temperature": 350,
+        "filename": "prob_18_ventilador"
+      },
+      "diagram_caption": "Sistema con ventilador interno",
+      "opciones": [
+        {"letra": "A", "texto": "310 J"},
+        {"letra": "B", "texto": "200 J"},
+        {"letra": "C", "texto": "150 J"},
+        {"letra": "D", "texto": "400 J"},
+        {"letra": "E", "texto": "540 J"}
+      ],
+      "respuesta_correcta": "A"
+    },
+    {
+      "pregunta": "Determine el trabajo realizado en el siguiente ciclo termodinámico mostrado en el diagrama P-V.",
+      "datos": "Ciclo horario A->B->C->A",
+      "diagram_type": "pv_diagram",
+      "diagram_params": {
+        "pressures": [1, 4, 1],
+        "volumes": [2, 2, 6],
+        "process_labels": ["Isócoro", "Adiabático", "Isobárico"],
+        "filename": "prob_ciclo_grafico"
+      },
+      "diagram_caption": "Ciclo Termodinámico (Ref. Teoría)",
+      "opciones": [
+        {"letra": "A", "texto": "6 atm·L"},
+        {"letra": "B", "texto": "12 atm·L"},
+        {"letra": "C", "texto": "3 atm·L"},
+        {"letra": "D", "texto": "4 atm·L"},
+        {"letra": "E", "texto": "8 atm·L"}
+      ],
+      "respuesta_correcta": "A"
+    }
+  ],
+  "ejercicios_adicionales": [
+    {
+      "pregunta": "Se tiene un gas ideal que experimenta una expansión isobárica. Si la temperatura absoluta se duplica, ¿qué sucede con el volumen?",
+      "datos": "Proceso: P = cte",
+      "opciones": [
+        {"letra": "A", "texto": "Se reduce a la mitad"},
+        {"letra": "B", "texto": "Permanece constante"},
+        {"letra": "C", "texto": "Se duplica"},
+        {"letra": "D", "texto": "Se cuadruplica"},
+        {"letra": "E", "texto": "No se puede determinar"}
+      ],
+      "respuesta_correcta": "C"
+    }
+  ]
+}
