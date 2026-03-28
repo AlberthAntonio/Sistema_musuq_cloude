@@ -8,6 +8,7 @@ from sqlalchemy import func
 
 from app.models.asistencia import Asistencia
 from app.models.alumno import Alumno
+from app.models.matricula import Matricula
 from app.schemas.asistencia import AsistenciaCreate, AsistenciaUpdate
 
 
@@ -41,7 +42,8 @@ class AsistenciaService:
         turno: Optional[str] = None,
         estado: Optional[str] = None,
         fecha_inicio: Optional[date] = None,
-        fecha_fin: Optional[date] = None
+        fecha_fin: Optional[date] = None,
+        periodo_id: Optional[int] = None
     ) -> List[Asistencia]:
         """Listar asistencias con filtros. Soporta fecha exacta o rango fecha_inicio/fecha_fin."""
         query = db.query(Asistencia).options(joinedload(Asistencia.alumno))
@@ -49,15 +51,21 @@ class AsistenciaService:
         if fecha:
             query = query.filter(Asistencia.fecha == fecha)
         elif fecha_inicio or fecha_fin:
-            # Rango de fechas (solo se aplica si no se especificó fecha exacta)
             if fecha_inicio:
                 query = query.filter(Asistencia.fecha >= fecha_inicio)
             if fecha_fin:
                 query = query.filter(Asistencia.fecha <= fecha_fin)
         if alumno_id:
             query = query.filter(Asistencia.alumno_id == alumno_id)
+        if periodo_id:
+            query = query.filter(Asistencia.periodo_id == periodo_id)
         if grupo:
-            query = query.join(Alumno).filter(Alumno.grupo == grupo)
+            # FIX: grupo vive en Matricula, no en Alumno
+            alumno_ids_subq = db.query(Matricula.alumno_id).filter(
+                Matricula.grupo == grupo,
+                Matricula.estado == "activo"
+            ).scalar_subquery()
+            query = query.filter(Asistencia.alumno_id.in_(alumno_ids_subq))
         if turno:
             query = query.filter(Asistencia.turno == turno)
         if estado:
@@ -99,7 +107,7 @@ class AsistenciaService:
         for registro in registros:
             try:
                 alumno_id = registro.get("alumno_id")
-                estado = registro.get("estado", "Puntual")
+                estado = registro.get("estado", "PUNTUAL")
                 hora_str = registro.get("hora")
                 
                 # Saltar si ya existe
@@ -137,10 +145,17 @@ class AsistenciaService:
     ) -> List[Asistencia]:
         """Obtener asistencias del día de hoy."""
         hoy = date.today()
-        query = db.query(Asistencia).filter(Asistencia.fecha == hoy)
+        query = db.query(Asistencia).options(
+            joinedload(Asistencia.alumno).joinedload(Alumno.matriculas)
+        ).filter(Asistencia.fecha == hoy)
         
         if grupo:
-            query = query.join(Alumno).filter(Alumno.grupo == grupo)
+            # FIX: grupo vive en Matricula, no en Alumno
+            alumno_ids_subq = db.query(Matricula.alumno_id).filter(
+                Matricula.grupo == grupo,
+                Matricula.estado == "activo"
+            ).scalar_subquery()
+            query = query.filter(Asistencia.alumno_id.in_(alumno_ids_subq))
         if turno:
             query = query.filter(Asistencia.turno == turno)
         
@@ -187,16 +202,21 @@ class AsistenciaService:
         query = db.query(Asistencia).filter(Asistencia.fecha == fecha_reporte)
         
         if grupo:
-            query = query.join(Alumno).filter(Alumno.grupo == grupo)
+            # FIX: grupo vive en Matricula, no en Alumno
+            alumno_ids_subq = db.query(Matricula.alumno_id).filter(
+                Matricula.grupo == grupo,
+                Matricula.estado == "activo"
+            ).scalar_subquery()
+            query = query.filter(Asistencia.alumno_id.in_(alumno_ids_subq))
         if turno:
             query = query.filter(Asistencia.turno == turno)
         
         asistencias = query.all()
         total = len(asistencias)
         
-        puntual = sum(1 for a in asistencias if a.estado == "Puntual")
-        tarde = sum(1 for a in asistencias if a.estado == "Tarde")
-        falta = sum(1 for a in asistencias if a.estado == "Falta")
+        puntual = sum(1 for a in asistencias if a.estado == "PUNTUAL")
+        tardanza = sum(1 for a in asistencias if a.estado == "TARDANZA")
+        falta = sum(1 for a in asistencias if a.estado == "INASISTENCIA")
         
         return {
             "fecha": fecha_reporte,
@@ -204,9 +224,9 @@ class AsistenciaService:
             "turno": turno,
             "total": total,
             "puntual": puntual,
-            "tarde": tarde,
+            "tardanza": tardanza,
             "falta": falta,
-            "porcentaje_asistencia": round((puntual + tarde) / total * 100, 2) if total > 0 else 0
+            "porcentaje_asistencia": round((puntual + tardanza) / total * 100, 2) if total > 0 else 0
         }
     
     def reporte_alumno(
@@ -214,15 +234,28 @@ class AsistenciaService:
         db: Session, 
         alumno_id: int,
         fecha_inicio: Optional[date] = None,
-        fecha_fin: Optional[date] = None
+        fecha_fin: Optional[date] = None,
+        periodo_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """Generar reporte de asistencia de un alumno."""
         alumno = db.query(Alumno).filter(Alumno.id == alumno_id).first()
         if not alumno:
             raise ValueError("Alumno no encontrado")
         
+        # FIX: codigo_matricula vive en Matricula, no en Alumno
+        mat_query = db.query(Matricula).filter(
+            Matricula.alumno_id == alumno_id,
+            Matricula.estado == "activo"
+        )
+        if periodo_id:
+            mat_query = mat_query.filter(Matricula.periodo_id == periodo_id)
+        matricula = mat_query.first()
+        codigo = matricula.codigo_matricula if matricula else "SIN_MATRICULA"
+        
         query = db.query(Asistencia).filter(Asistencia.alumno_id == alumno_id)
         
+        if periodo_id:
+            query = query.filter(Asistencia.periodo_id == periodo_id)
         if fecha_inicio:
             query = query.filter(Asistencia.fecha >= fecha_inicio)
         if fecha_fin:
@@ -231,18 +264,18 @@ class AsistenciaService:
         asistencias = query.all()
         total = len(asistencias)
         
-        puntual = sum(1 for a in asistencias if a.estado == "Puntual")
-        tarde = sum(1 for a in asistencias if a.estado == "Tarde")
-        falta = sum(1 for a in asistencias if a.estado == "Falta")
+        puntual = sum(1 for a in asistencias if a.estado == "PUNTUAL")
+        tardanza = sum(1 for a in asistencias if a.estado == "TARDANZA")
+        falta = sum(1 for a in asistencias if a.estado == "INASISTENCIA")
         
         return {
             "alumno_id": alumno_id,
-            "codigo_matricula": alumno.codigo_matricula,
+            "codigo_matricula": codigo,
             "nombre_completo": alumno.nombre_completo,
             "total_puntual": puntual,
-            "total_tarde": tarde,
+            "total_tardanza": tardanza,
             "total_falta": falta,
-            "porcentaje_asistencia": round((puntual + tarde) / total * 100, 2) if total > 0 else 0
+            "porcentaje_asistencia": round((puntual + tardanza) / total * 100, 2) if total > 0 else 0
         }
 
 

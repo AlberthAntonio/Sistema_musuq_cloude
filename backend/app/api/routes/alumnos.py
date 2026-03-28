@@ -1,5 +1,5 @@
 """
-Rutas CRUD para alumnos - Usando capa de servicios.
+Rutas CRUD para alumnos - Con filtro multi-tenant por periodo.
 """
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -9,7 +9,7 @@ from app.db import get_db
 from app.models.usuario import Usuario
 from app.schemas.alumno import AlumnoCreate, AlumnoResponse, AlumnoUpdate, AlumnoResumen
 from app.services.alumno_service import alumno_service
-from app.api.routes.auth import get_current_user, require_role
+from app.api.routes.auth import get_current_user, require_role, verificar_no_auxiliar
 
 router = APIRouter()
 
@@ -18,71 +18,39 @@ router = APIRouter()
 async def listar_alumnos(
     skip: int = 0,
     limit: int = 100,
-    grupo: Optional[str] = Query(None, description="Filtrar por grupo (A, B, C, D)"),
-    carrera: Optional[str] = Query(None, description="Filtrar por carrera"),
-    modalidad: Optional[str] = Query(None, description="Filtrar por modalidad"),
-    horario: Optional[str] = Query(None, description="Filtrar por horario (MATUTINO, VESPERTINO)"),
     activo: Optional[bool] = Query(True, description="Filtrar por estado activo"),
+    periodo_id: Optional[int] = Query(None, description="Filtrar por periodo académico"),
+    grupo: Optional[str] = Query(None, description="Filtrar por grupo (A, B, C, D…)"),
+    modalidad: Optional[str] = Query(None, description="Filtrar por modalidad de matrícula"),
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user)
+    current_user: Usuario = Depends(get_current_user),
 ):
-    """Listar todos los alumnos con filtros opcionales."""
-    return alumno_service.listar(db, skip, limit, grupo, carrera, modalidad, horario, activo)
+    """Listar alumnos con filtros opcionales. grupo/modalidad requieren join con matrículas."""
+    return alumno_service.listar(db, skip, limit, activo, periodo_id, grupo, modalidad)
 
 
 @router.post("/", response_model=AlumnoResponse, status_code=status.HTTP_201_CREATED)
 async def crear_alumno(
     alumno: AlumnoCreate,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(require_role("admin", "secretaria"))
+    current_user: Usuario = Depends(verificar_no_auxiliar)
 ):
-    """Crear nuevo alumno."""
+    """Crear nuevo alumno (solo datos personales). Bloqueado para AUXILIAR."""
     try:
-        return alumno_service.crear(db, alumno)
+        return alumno_service.crear(db, alumno, usuario_actual_id=current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.get("/buscar", response_model=List[AlumnoResumen])
+@router.get("/buscar", response_model=List[AlumnoResponse])
 async def buscar_alumnos(
     q: str = Query(..., min_length=2, description="Término de búsqueda"),
+    periodo_id: Optional[int] = Query(None, description="Filtrar por periodo"),
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(get_current_user)
 ):
     """Buscar alumnos por nombre, apellido, DNI o código de matrícula."""
-    alumnos = alumno_service.buscar(db, q)
-    return [
-        {
-            "id": a.id,
-            "codigo_matricula": a.codigo_matricula,
-            "dni": a.dni,
-            "nombre_completo": a.nombre_completo,
-            "grupo": a.grupo,
-            "activo": a.activo
-        }
-        for a in alumnos
-    ]
-
-
-@router.get("/por-grupo/{grupo}", response_model=List[AlumnoResumen])
-async def listar_por_grupo(
-    grupo: str,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user)
-):
-    """Listar alumnos de un grupo específico."""
-    alumnos = alumno_service.listar_por_grupo(db, grupo)
-    return [
-        {
-            "id": a.id,
-            "codigo_matricula": a.codigo_matricula,
-            "dni": a.dni,
-            "nombre_completo": a.nombre_completo,
-            "grupo": a.grupo,
-            "activo": a.activo
-        }
-        for a in alumnos
-    ]
+    return alumno_service.buscar(db, q, periodo_id=periodo_id)
 
 
 @router.get("/{alumno_id}", response_model=AlumnoResponse)
@@ -93,19 +61,6 @@ async def obtener_alumno(
 ):
     """Obtener alumno por ID."""
     alumno = alumno_service.obtener_por_id(db, alumno_id)
-    if not alumno:
-        raise HTTPException(status_code=404, detail="Alumno no encontrado")
-    return alumno
-
-
-@router.get("/codigo/{codigo}", response_model=AlumnoResponse)
-async def obtener_por_codigo(
-    codigo: str,
-    db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user)
-):
-    """Obtener alumno por código de matrícula."""
-    alumno = alumno_service.obtener_por_codigo(db, codigo)
     if not alumno:
         raise HTTPException(status_code=404, detail="Alumno no encontrado")
     return alumno
@@ -131,7 +86,7 @@ async def actualizar_alumno(
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(require_role("admin", "secretaria"))
 ):
-    """Actualizar alumno."""
+    """Actualizar datos personales del alumno."""
     try:
         return alumno_service.actualizar(db, alumno_id, alumno_update)
     except ValueError as e:

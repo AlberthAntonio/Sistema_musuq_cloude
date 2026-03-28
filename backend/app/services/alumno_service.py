@@ -1,11 +1,12 @@
 """
-Servicio de Alumnos - Lógica de negocio y validaciones.
+Servicio de Alumnos - Lógica de negocio con filtro por periodo.
 """
 from typing import List, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 
 from app.models.alumno import Alumno
+from app.models.matricula import Matricula
 from app.schemas.alumno import AlumnoCreate, AlumnoUpdate
 
 
@@ -21,95 +22,55 @@ class AlumnoService:
             query = query.filter(Alumno.id != alumno_id)
         return query.first() is None
     
-    def validar_codigo_unico(self, db: Session, codigo: str, alumno_id: Optional[int] = None) -> bool:
-        """Verifica si el código de matrícula ya existe. Retorna True si está disponible."""
-        query = db.query(Alumno).filter(Alumno.codigo_matricula == codigo)
-        if alumno_id:
-            query = query.filter(Alumno.id != alumno_id)
-        return query.first() is None
-    
-    def generar_codigo(self, db: Session, grupo: str, modalidad: str) -> str:
-        """
-        Generar código de matrícula con formato: {Año}{Prefijo}{Consecutivo}
-        Ejemplo: 26POA0001 (2026, Primera Opción Grupo A, alumno #1)
-        """
-        from datetime import datetime
-        
-        # Mapa de prefijos (Modalidad + Grupo)
-        mapa_prefijos = {
-            ("A", "PRIMERA OPCION"): "POA", ("A", "ORDINARIO"): "ORA", ("A", "COLEGIO"): "COA", ("A", "REFORZAMIENTO"): "REA",
-            ("B", "PRIMERA OPCION"): "POB", ("B", "ORDINARIO"): "ORB", ("B", "COLEGIO"): "COB", ("B", "REFORZAMIENTO"): "REB",
-            ("C", "PRIMERA OPCION"): "POC", ("C", "ORDINARIO"): "ORC", ("C", "COLEGIO"): "COC", ("C", "REFORZAMIENTO"): "REC",
-            ("D", "PRIMERA OPCION"): "POD", ("D", "ORDINARIO"): "ORD", ("D", "COLEGIO"): "COD", ("D", "REFORZAMIENTO"): "RED",
-        }
-        
-        # Obtener prefijo
-        sufijo = mapa_prefijos.get((grupo, modalidad), "GEN")
-        
-        # Año actual (2 dígitos)
-        anio = str(datetime.now().year)[-2:]
-        
-        # Prefijo completo: AñoSufijo (ej: 26POA)
-        prefijo_base = f"{anio}{sufijo}"
-        
-        # Buscar último código con este prefijo
-        ultimo = db.query(Alumno.codigo_matricula).filter(
-            Alumno.codigo_matricula.like(f"{prefijo_base}%")
-        ).order_by(Alumno.id.desc()).first()
-        
-        # Extraer consecutivo y sumar 1
-        if ultimo and ultimo[0]:
-            consecutivo = int(ultimo[0][-4:]) + 1
-        else:
-            consecutivo = 1
-        
-        # Formato final: {Año}{Sufijo}{Consecutivo:4digits}
-        return f"{prefijo_base}{consecutivo:04d}"
-    
     # ==================== OPERACIONES CRUD ====================
     
     def listar(
-        self, 
-        db: Session, 
-        skip: int = 0, 
+        self,
+        db: Session,
+        skip: int = 0,
         limit: int = 100,
+        activo: Optional[bool] = True,
+        periodo_id: Optional[int] = None,
         grupo: Optional[str] = None,
-        carrera: Optional[str] = None,
         modalidad: Optional[str] = None,
-        horario: Optional[str] = None,
-        activo: Optional[bool] = True
     ) -> List[Alumno]:
-        """Listar alumnos con filtros opcionales."""
-        query = db.query(Alumno)
-        
-        if grupo:
-            query = query.filter(Alumno.grupo == grupo)
-        if carrera:
-            query = query.filter(Alumno.carrera.ilike(f"%{carrera}%"))
-        if modalidad:
-            query = query.filter(Alumno.modalidad == modalidad)
-        if horario:
-            query = query.filter(Alumno.horario == horario)
+        """
+        Listar alumnos con filtros opcionales.
+        Si se provee periodo_id, retorna SOLO los alumnos matriculados en ese periodo.
+        Los filtros grupo/modalidad requieren join con Matricula.
+        """
+        query = db.query(Alumno).options(joinedload(Alumno.matriculas))
+
+        # Determinar si necesitamos join con Matricula
+        necesita_join = bool(periodo_id or grupo or modalidad)
+        if necesita_join:
+            query = query.join(Matricula, Matricula.alumno_id == Alumno.id)
+            if periodo_id:
+                query = query.filter(
+                    Matricula.periodo_id == periodo_id,
+                    Matricula.estado == "activo",
+                )
+            if grupo:
+                query = query.filter(Matricula.grupo == grupo)
+            if modalidad:
+                query = query.filter(Matricula.modalidad == modalidad)
+
         if activo is not None:
             query = query.filter(Alumno.activo == activo)
-        
-        return query.order_by(Alumno.apell_paterno, Alumno.apell_materno).offset(skip).limit(limit).all()
+
+        return query.distinct().order_by(
+            Alumno.apell_paterno, Alumno.apell_materno
+        ).offset(skip).limit(limit).all()
     
-    def crear(self, db: Session, datos: AlumnoCreate) -> Alumno:
-        """Crear nuevo alumno con validaciones y generación automática de código."""
+    def crear(self, db: Session, datos: AlumnoCreate, usuario_actual_id: Optional[int] = None) -> Alumno:
+        """Crear nuevo alumno (solo datos personales)."""
         # Validar DNI único
         if not self.validar_dni_unico(db, datos.dni):
             raise ValueError("El DNI ya está registrado")
         
-        # Generar código automáticamente si no viene
-        if not datos.codigo_matricula or datos.codigo_matricula.startswith("TMP-"):
-            datos.codigo_matricula = self.generar_codigo(db, datos.grupo, datos.modalidad)
-        
-        # Validar código único
-        if not self.validar_codigo_unico(db, datos.codigo_matricula):
-            raise ValueError("El código de matrícula ya existe")
-        
         alumno = Alumno(**datos.model_dump())
+        if usuario_actual_id:
+            alumno.creado_por = usuario_actual_id
         db.add(alumno)
         db.commit()
         db.refresh(alumno)
@@ -123,32 +84,45 @@ class AlumnoService:
         """Obtener alumno por DNI."""
         return db.query(Alumno).filter(Alumno.dni == dni).first()
     
-    def obtener_por_codigo(self, db: Session, codigo: str) -> Optional[Alumno]:
-        """Obtener alumno por código de matrícula."""
-        return db.query(Alumno).filter(Alumno.codigo_matricula == codigo).first()
-    
-    def buscar(self, db: Session, termino: str, limite: int = 20) -> List[Alumno]:
-        """Buscar alumnos por nombre, apellido, DNI o código."""
-        return db.query(Alumno).filter(
+    def buscar(
+        self, 
+        db: Session, 
+        termino: str, 
+        limite: int = 20,
+        periodo_id: Optional[int] = None
+    ) -> List[Alumno]:
+        """
+        Buscar alumnos por nombre, apellido o DNI.
+        Si se provee periodo_id, busca solo entre alumnos del periodo.
+        """
+        query = db.query(Alumno).options(joinedload(Alumno.matriculas))
+
+        # Si busca por código de matrícula exacto o parcial, incluir JOIN
+        # Siempre hacemos outerjoin para poder filtrar también por codigo_matricula
+        query = query.outerjoin(Matricula, Matricula.alumno_id == Alumno.id)
+
+        # Filtro multi-tenant
+        if periodo_id:
+            query = query.filter(
+                Matricula.periodo_id == periodo_id,
+                Matricula.estado == "activo"
+            )
+
+        query = query.filter(
             or_(
                 Alumno.nombres.ilike(f"%{termino}%"),
                 Alumno.apell_paterno.ilike(f"%{termino}%"),
                 Alumno.apell_materno.ilike(f"%{termino}%"),
                 Alumno.dni.ilike(f"%{termino}%"),
-                Alumno.codigo_matricula.ilike(f"%{termino}%")
+                Matricula.codigo_matricula.ilike(f"%{termino}%"),
             ),
             Alumno.activo == True
-        ).limit(limite).all()
-    
-    def listar_por_grupo(self, db: Session, grupo: str) -> List[Alumno]:
-        """Listar alumnos activos de un grupo."""
-        return db.query(Alumno).filter(
-            Alumno.grupo == grupo,
-            Alumno.activo == True
-        ).order_by(Alumno.apell_paterno, Alumno.apell_materno).all()
+        )
+
+        return query.distinct().limit(limite).all()
     
     def actualizar(self, db: Session, alumno_id: int, datos: AlumnoUpdate) -> Alumno:
-        """Actualizar alumno."""
+        """Actualizar datos personales del alumno."""
         alumno = self.obtener_por_id(db, alumno_id)
         if not alumno:
             raise ValueError("Alumno no encontrado")

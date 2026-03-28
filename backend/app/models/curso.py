@@ -23,6 +23,13 @@ class Curso(Base):
     # Relaciones
     asignaciones = relationship("MallaCurricular", back_populates="curso", cascade="all, delete-orphan")
     horarios = relationship("Horario", back_populates="curso", cascade="all, delete-orphan")
+
+    # Relación con docentes (muchos-a-muchos) a través de DocenteCurso
+    curso_docentes = relationship(
+        "DocenteCurso",
+        back_populates="curso",
+        cascade="all, delete-orphan"
+    )
     
     def __repr__(self):
         return self.nombre

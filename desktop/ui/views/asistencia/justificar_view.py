@@ -305,7 +305,7 @@ class JustificarView(ctk.CTkFrame):
 
                 data_safe.append({
                     "id": alum.get("id"),
-                    "nombre_completo": nombre,
+                    "nombre_completo": nombre.upper() if nombre else "",
                     "codigo": alum.get("codigo_matricula"),
                     "dni": alum.get("dni")
                 })
@@ -638,23 +638,24 @@ class JustificarView(ctk.CTkFrame):
         # Crear celdas
         crear_celda(row, datos.get("fecha", ""), self.ANCHOS[0], TM.text())
         crear_celda(row, datos.get("hora", ""), self.ANCHOS[1], TM.text_secondary())
-        crear_celda(row, datos.get("turno", ""), self.ANCHOS[2], TM.text_secondary())
+        crear_celda(row, datos.get("turno", "").upper(), self.ANCHOS[2], TM.text_secondary())
 
-        # Estado con color
+        # Estado con color — backend devuelve: "Puntual", "Tarde", "Falta", "Justificado"
         estado = datos.get("estado", "")
         bg_estado = TM.bg_panel()
+        estado_u = estado.upper()
 
-        if "PUNTUAL" in estado:
+        if "PUNTUAL" in estado_u:
             bg_estado = st.Colors.PUNTUAL
-        elif "TARDANZA" in estado:
+        elif "TARD" in estado_u:  # "Tarde" o "TARDANZA"
             bg_estado = st.Colors.TARDANZA
-        elif "INASISTENCIA" in estado or "FALTA" in estado:
+        elif "INASISTENCIA" in estado_u or "FALTA" in estado_u:
             bg_estado = st.Colors.FALTA
-        elif "JUSTIFICADO" in estado:
+        elif "JUSTIFICADO" in estado_u or "JUSTIF" in estado_u:
             bg_estado = st.Colors.ASISTENCIA
 
-        crear_celda(row, estado, self.ANCHOS[3], bg_badge=bg_estado)
-        crear_celda(row, datos.get("observacion", ""), self.ANCHOS[4], TM.text_secondary(), "w")
+        crear_celda(row, estado_u, self.ANCHOS[3], bg_badge=bg_estado)
+        crear_celda(row, (datos.get("observacion") or "").upper(), self.ANCHOS[4], TM.text_secondary(), "w")
 
     def seleccionar_fila_visual(self, widget_fila, datos, bg_original):
         """Maneja la selección visual de una fila"""
@@ -676,7 +677,7 @@ class JustificarView(ctk.CTkFrame):
         # Habilitar botón según el estado
         id_asistencia, fecha, estado = datos
 
-        if "JUSTIFICADO" in estado:
+        if "JUSTIF" in estado.upper():
             self.btn_justificar.configure(
                 state="disabled",
                 text="✅ YA JUSTIFICADO",
@@ -690,7 +691,6 @@ class JustificarView(ctk.CTkFrame):
                 fg_color=st.Colors.TARDANZA,
                 text_color="white"
             )
-
     # ============================================================
     # ACCIÓN DE JUSTIFICACIÓN
     # ============================================================

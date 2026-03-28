@@ -6,9 +6,21 @@ from typing import Optional
 
 
 class Token(BaseModel):
-    """Respuesta de token JWT."""
+    """Respuesta de token JWT (solo access, compatibilidad hacia atrás)."""
     access_token: str
     token_type: str = "bearer"
+
+
+class TokenPair(BaseModel):
+    """Par completo de tokens: access + refresh."""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class RefreshRequest(BaseModel):
+    """Solicitud de renovación de token."""
+    refresh_token: str
 
 
 class TokenData(BaseModel):

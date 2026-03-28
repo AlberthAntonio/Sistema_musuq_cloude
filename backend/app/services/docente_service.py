@@ -1,11 +1,11 @@
-"""
-Servicio de Docentes - Lógica de negocio y validaciones.
-"""
+"""Servicio de Docentes - Lógica de negocio y validaciones."""
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from app.models.docente import Docente
+from app.models.docente_curso import DocenteCurso
+from app.models.curso import Curso
 from app.schemas.docente import DocenteCreate, DocenteUpdate
 
 
@@ -97,6 +97,70 @@ class DocenteService:
         db.commit()
         db.refresh(docente)
         return docente
+
+    # ==================== CURSOS ASIGNADOS ====================
+
+    def obtener_cursos(self, db: Session, docente_id: int) -> List[Curso]:
+        """Obtener cursos asignados a un docente."""
+        docente = self.obtener_por_id(db, docente_id)
+        if not docente:
+            raise ValueError("Docente no encontrado")
+
+        query = (
+            db.query(Curso)
+            .join(DocenteCurso, DocenteCurso.curso_id == Curso.id)
+            .filter(DocenteCurso.docente_id == docente_id, DocenteCurso.activo == True)
+        )
+        return query.order_by(Curso.nombre).all()
+
+    def actualizar_cursos(self, db: Session, docente_id: int, curso_ids: List[int]) -> Docente:
+        """Reemplazar los cursos asignados a un docente por la lista dada."""
+        docente = self.obtener_por_id(db, docente_id)
+        if not docente:
+            raise ValueError("Docente no encontrado")
+
+        # Limpiar todas las asignaciones actuales
+        db.query(DocenteCurso).filter(DocenteCurso.docente_id == docente_id).delete()
+
+        # Insertar nuevas asignaciones (evitar duplicados)
+        for curso_id in sorted(set(curso_ids or [])):
+            assoc = DocenteCurso(docente_id=docente_id, curso_id=curso_id, activo=True)
+            db.add(assoc)
+
+        db.commit()
+        db.refresh(docente)
+        return docente
+
+    def quitar_curso(self, db: Session, docente_id: int, curso_id: int) -> bool:
+        """Quitar una asignación específica docente-curso."""
+        docente = self.obtener_por_id(db, docente_id)
+        if not docente:
+            raise ValueError("Docente no encontrado")
+
+        asignacion = db.query(DocenteCurso).filter(
+            DocenteCurso.docente_id == docente_id,
+            DocenteCurso.curso_id == curso_id,
+        ).first()
+        if not asignacion:
+            raise ValueError("La asignación docente-curso no existe")
+
+        db.delete(asignacion)
+        db.commit()
+        return True
+
+    def listar_por_curso(self, db: Session, curso_id: int) -> List[Docente]:
+        """Listar docentes que dictan un curso específico."""
+        query = (
+            db.query(Docente)
+            .join(DocenteCurso, DocenteCurso.docente_id == Docente.id)
+            .filter(
+                DocenteCurso.curso_id == curso_id,
+                DocenteCurso.activo == True,
+                Docente.activo == True,
+            )
+            .order_by(Docente.apellidos, Docente.nombres)
+        )
+        return query.all()
 
 
 # Instancia global del servicio

@@ -28,6 +28,7 @@ async def listar_asistencias(
     grupo: Optional[str] = Query(None, description="Filtrar por grupo"),
     turno: Optional[str] = Query(None, description="Filtrar por turno (MAÑANA, TARDE)"),
     estado: Optional[str] = Query(None, description="Filtrar por estado (Puntual, Tarde, Falta)"),
+    periodo_id: Optional[int] = Query(None, description="Filtrar por periodo académico"),
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -35,7 +36,7 @@ async def listar_asistencias(
 ):
     """Listar asistencias con filtros opcionales. Soporta fecha exacta o rango fecha_inicio/fecha_fin."""
     return asistencia_service.listar(
-        db, skip, limit, fecha, alumno_id, grupo, turno, estado, fecha_inicio, fecha_fin
+        db, skip, limit, fecha, alumno_id, grupo, turno, estado, fecha_inicio, fecha_fin, periodo_id
     )
 
 
@@ -92,12 +93,13 @@ async def reporte_alumno(
     alumno_id: int,
     fecha_inicio: Optional[date] = None,
     fecha_fin: Optional[date] = None,
+    periodo_id: Optional[int] = Query(None, description="Filtrar por periodo académico"),
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(get_current_user)
 ):
     """Reporte de asistencia de un alumno."""
     try:
-        return asistencia_service.reporte_alumno(db, alumno_id, fecha_inicio, fecha_fin)
+        return asistencia_service.reporte_alumno(db, alumno_id, fecha_inicio, fecha_fin, periodo_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

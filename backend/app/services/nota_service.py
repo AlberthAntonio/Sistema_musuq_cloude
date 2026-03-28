@@ -12,7 +12,45 @@ from app.schemas.nota import NotaCreate, NotaUpdate
 
 class NotaService:
     """Servicio para operaciones de notas."""
-    
+
+    def listar(
+        self,
+        db: Session,
+        alumno_id: Optional[int] = None,
+        sesion_id: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """Listar notas con filtros opcionales de alumno y/o sesión."""
+        query = db.query(Nota)
+        if alumno_id:
+            query = query.filter(Nota.alumno_id == alumno_id)
+        if sesion_id:
+            query = query.filter(Nota.sesion_id == sesion_id)
+
+        notas = query.offset(skip).limit(limit).all()
+        resultado = []
+        # Carga eager manual para evitar N+1
+        alumno_cache: Dict[int, Any] = {}
+        sesion_cache: Dict[int, Any] = {}
+        for nota in notas:
+            if nota.alumno_id not in alumno_cache:
+                alumno_cache[nota.alumno_id] = db.query(Alumno).filter(Alumno.id == nota.alumno_id).first()
+            if nota.sesion_id not in sesion_cache:
+                sesion_cache[nota.sesion_id] = db.query(SesionExamen).filter(SesionExamen.id == nota.sesion_id).first()
+            a = alumno_cache[nota.alumno_id]
+            s = sesion_cache[nota.sesion_id]
+            resultado.append({
+                "id": nota.id,
+                "alumno_id": nota.alumno_id,
+                "alumno_nombre": f"{a.nombres} {a.apell_paterno}" if a else None,
+                "sesion_id": nota.sesion_id,
+                "sesion_nombre": s.nombre if s else None,
+                "curso_nombre": nota.curso_nombre,
+                "valor": nota.valor,
+            })
+        return resultado
+
     def listar_por_sesion(self, db: Session, sesion_id: int) -> List[Dict[str, Any]]:
         """Listar notas de una sesión con info del alumno."""
         notas = db.query(Nota).filter(Nota.sesion_id == sesion_id).all()

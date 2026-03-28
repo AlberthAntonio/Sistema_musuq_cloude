@@ -17,6 +17,8 @@ from utils.audio_helper import AudioHelper
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
 from mixins.infinite_scroll_mixin import InfiniteScrollMixin
+from ui.dialogs.dialogo_alerta_turno import DialogoAlertaTurno
+from ui.dialogs.dialogo_inasistencias import DialogoInasistencias
 
 # Intentar poner fechas en español
 try:
@@ -165,6 +167,18 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         )
         self.fr_resultados.pack(fill="both", expand=True)
 
+        self.lbl_busqueda_loading = ctk.CTkLabel(
+            self.fr_resultados,
+            text="🔍 Buscando...",
+            text_color=TM.text_secondary()
+        )
+
+        self.lbl_busqueda_empty = ctk.CTkLabel(
+            self.fr_resultados,
+            text="⚠️ No se encontraron coincidencias",
+            text_color=TM.text_secondary()
+        )
+
         # 5. Tabla Historial con diseño mejorado
         self.fr_tabla = ctk.CTkFrame(self.card_izq, fg_color="transparent")
         self.fr_tabla.grid(row=4, column=0, sticky="nsew", padx=0, pady=(5, 0))
@@ -304,6 +318,16 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         )
         self.btn_limpiar.pack(fill="x", pady=5)
 
+        self.btn_inasistencias = ctk.CTkButton(
+            self.fr_botones,
+            text="📋 MARCAR INASISTENCIAS",
+            height=40,
+            fg_color="#6c3483",
+            hover_color="#7d3c98",
+            command=self.confirmar_marcar_inasistencias
+        )
+        self.btn_inasistencias.pack(fill="x", pady=5)
+
         self.btn_eliminar = ctk.CTkButton(
             self.fr_botones,
             text="🗑️ ELIMINAR",
@@ -329,7 +353,7 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         fr_columnas = ctk.CTkFrame(header, fg_color="transparent")
         fr_columnas.pack(side="left", padx=5)
 
-        cols = ["", "CÓDIGO", "ALUMNO", "TURNO", "ESTADO", "HORA"]
+        cols = ["", "CÓDIGO", "ALUMNO", "HORARIO", "ESTADO", "HORA"]
 
         for i, t in enumerate(cols):
             if i == 0:
@@ -498,8 +522,8 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
 
     # ================= REGISTRO DE ASISTENCIA =================
 
-    def registrar_asistencia(self, event=None):
-        codigo = self.entry_codigo.get().strip()
+    def registrar_asistencia(self, event=None, forzar_turno_cruzado: bool = False, _codigo_prefijo: str = ""):
+        codigo = _codigo_prefijo or self.entry_codigo.get().strip()
         if not codigo:
             return
 
@@ -511,17 +535,28 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             text_color="white"
         )
 
-        threading.Thread(target=self._hilo_registrar, args=(codigo,), daemon=True).start()
+        threading.Thread(
+            target=self._hilo_registrar,
+            args=(codigo, forzar_turno_cruzado),
+            daemon=True
+        ).start()
 
-    def _hilo_registrar(self, codigo):
-        exito, mensaje, datos, alerta_turno = self.controller.registrar_por_dni(codigo)
-        self.after(0, lambda: self._post_registro(exito, mensaje, datos, alerta_turno))
+    def _hilo_registrar(self, codigo: str, forzar_turno_cruzado: bool = False):
+        exito, mensaje, datos, alerta_turno = self.controller.registrar_por_dni(
+            codigo, forzar_turno_cruzado=forzar_turno_cruzado
+        )
+        self.after(0, lambda: self._post_registro(exito, mensaje, datos, alerta_turno, codigo))
 
-    def _post_registro(self, exito, mensaje, datos, alerta_turno):
+    def _post_registro(self, exito, mensaje, datos, alerta_turno, codigo_original: str = ""):
         self.entry_codigo.configure(state="normal")
         self.entry_codigo.delete(0, 'end')
         self.entry_codigo.focus()
         self.btn_marcar.configure(state="normal")
+
+        # ── Caso especial: turno cruzado detectado, aún NO registrado ──
+        if not exito and mensaje == "TURNO_CRUZADO_PENDIENTE":
+            self._mostrar_dialogo_turno_cruzado(datos, codigo_original)
+            return
 
         if not exito:
             self.lbl_estado.configure(
@@ -536,20 +571,70 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             nombre = datos.get("alumno", {}).get("nombres", "Alumno")
 
             if alerta_turno:
+                # Registro forzado tras confirmación del personal
                 self.lbl_estado.configure(
                     text=f"⚠️ TURNO CRUZADO\n{nombre}",
                     fg_color=st.Colors.TARDANZA,
                     text_color="white"
                 )
-                self.audio.reproducir_alerta_turno_cruzado()
             else:
                 self.lbl_estado.configure(
                     text=f"✅ REGISTRADO\n{nombre}",
                     fg_color=st.Colors.PUNTUAL,
                     text_color="white"
                 )
+                self.audio.reproducir_registro_exitoso()
 
             self.cargar_tabla_thread()
+            self._reset_estado(delay=3000)
+
+    def _mostrar_dialogo_turno_cruzado(self, datos: dict, codigo_original: str):
+        """
+        Muestra el diálogo modal de turno cruzado.
+        - Si el personal CONFIRMA → relanza el registro con forzar=True.
+        - Si RECHAZA → cancela y restaura estado.
+        """
+        # Actualizar estado visual
+        self.lbl_estado.configure(
+            text="⚠️ TURNO CRUZADO",
+            fg_color=st.Colors.TARDANZA,
+            text_color="white"
+        )
+
+        # ── Disparar alarma ANTES del grab_set() del diálogo ──────────
+        # grab_set() captura eventos del SO y puede silenciar winsound
+        self.audio.reproducir_alerta_turno_cruzado()
+        self.update()  # forzar render antes de bloquear el event loop
+
+        dialogo = DialogoAlertaTurno(
+            parent=self.winfo_toplevel(),
+            datos_alumno=datos,
+            audio_helper=self.audio
+        )
+        # wait_window bloquea el event loop hasta que el diálogo se cierre
+        self.wait_window(dialogo)
+
+        if dialogo.confirmado:
+            # Personal autorizó → registrar con forzar=True
+            self.entry_codigo.configure(state="disabled")
+            self.btn_marcar.configure(state="disabled")
+            self.lbl_estado.configure(
+                text="PROCESANDO...",
+                fg_color=TM.warning(),
+                text_color="white"
+            )
+            threading.Thread(
+                target=self._hilo_registrar,
+                args=(codigo_original, True),
+                daemon=True
+            ).start()
+        else:
+            # Personal rechazó → cancelar
+            self.lbl_estado.configure(
+                text="🚫 INGRESO RECHAZADO",
+                fg_color=TM.danger(),
+                text_color="white"
+            )
             self._reset_estado(delay=3000)
 
     def _reset_estado(self, delay=3000):
@@ -558,6 +643,123 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             fg_color=TM.bg_panel(),
             text_color=TM.text_secondary()
         ) if self.winfo_exists() else None)
+
+    # ================= MARCAR INASISTENCIAS =================
+
+    def confirmar_marcar_inasistencias(self):
+        """
+        Paso 1: detecta el turno activo y lanza un hilo para obtener el
+        resumen previo. Si no hay turno activo, avisa y sale.
+        """
+        turno_str = self._obtener_turno_actual()
+        if "MAÑANA" in turno_str:
+            turno = "MAÑANA"
+        elif "TARDE" in turno_str:
+            turno = "TARDE"
+        else:
+            messagebox.showwarning(
+                "Fuera de horario",
+                "No hay un turno activo en este momento.\n"
+                "Esta acción solo está disponible dentro del horario escolar."
+            )
+            return
+
+        # Deshabilitar botón y mostrar estado mientras se calcula el preview
+        self.btn_inasistencias.configure(state="disabled", text="⏳ Calculando...")
+        self.lbl_estado.configure(
+            text="CALCULANDO...",
+            fg_color="#6c3483",
+            text_color="white"
+        )
+        threading.Thread(
+            target=self._hilo_previsualizar,
+            args=(turno,),
+            daemon=True
+        ).start()
+
+    def _hilo_previsualizar(self, turno: str):
+        """Paso 2 (hilo): obtiene el resumen sin registrar nada."""
+        exito, msg_error, resumen = self.controller.previsualizar_inasistencias(turno)
+        self.after(0, lambda: self._mostrar_dialogo_inasistencias(exito, msg_error, resumen, turno))
+
+    def _mostrar_dialogo_inasistencias(self, exito: bool, msg_error: str, resumen: dict, turno: str):
+        """
+        Paso 3 (hilo principal): restaura el botón y muestra el diálogo.
+        Si el usuario confirma, lanza el hilo de registro.
+        """
+        self.btn_inasistencias.configure(state="normal", text="📋 MARCAR INASISTENCIAS")
+
+        if not exito:
+            self.lbl_estado.configure(
+                text="❌ ERROR",
+                fg_color=TM.danger(),
+                text_color="white"
+            )
+            messagebox.showerror("Error al calcular resumen", msg_error)
+            self._reset_estado()
+            return
+
+        self.lbl_estado.configure(
+            text="ESPERANDO...",
+            fg_color=TM.bg_panel(),
+            text_color=TM.text_secondary()
+        )
+
+        dialogo = DialogoInasistencias(
+            parent=self.winfo_toplevel(),
+            resumen=resumen
+        )
+        self.wait_window(dialogo)
+
+        if dialogo.confirmado:
+            self._ejecutar_marcar_inasistencias(turno)
+
+    def _ejecutar_marcar_inasistencias(self, turno: str):
+        """Paso 4: lanza el registro masivo en un hilo."""
+        self.btn_inasistencias.configure(state="disabled", text="⏳ Registrando...")
+        self.lbl_estado.configure(
+            text="MARCANDO\nFALTAS...",
+            fg_color="#6c3483",
+            text_color="white"
+        )
+        threading.Thread(
+            target=self._hilo_inasistencias,
+            args=(turno,),
+            daemon=True
+        ).start()
+
+    def _hilo_inasistencias(self, turno: str):
+        """Paso 5 (hilo): ejecuta el registro masivo."""
+        exito, mensaje, cantidad = self.controller.marcar_inasistencias_masivo(turno)
+        self.after(0, lambda: self._post_inasistencias(exito, mensaje, cantidad))
+
+    def _post_inasistencias(self, exito: bool, mensaje: str, cantidad: int):
+        """Paso 6 (hilo principal): muestra resultado y refresca tabla."""
+        self.btn_inasistencias.configure(state="normal", text="📋 MARCAR INASISTENCIAS")
+
+        if exito:
+            if cantidad == 0:
+                self.lbl_estado.configure(
+                    text="✅ SIN AUSENTES",
+                    fg_color=TM.success(),
+                    text_color="white"
+                )
+            else:
+                self.lbl_estado.configure(
+                    text=f"📋 {cantidad}\nFALTAS MARCADAS",
+                    fg_color="#6c3483",
+                    text_color="white"
+                )
+                self.cargar_tabla_thread()
+        else:
+            self.lbl_estado.configure(
+                text="❌ ERROR",
+                fg_color=TM.danger(),
+                text_color="white"
+            )
+            messagebox.showerror("Error", mensaje)
+
+        self._reset_estado(delay=4000)
 
     def eliminar_seleccion(self):
         if not self.fila_seleccionada or not self.datos_seleccionados:
@@ -610,8 +812,7 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         texto = self.entry_busqueda.get().strip()
         print(f"[DEBUG View] Búsqueda solicitada: '{texto}'")
 
-        for w in self.fr_resultados.winfo_children():
-            w.destroy()
+        self._limpiar_resultados()
 
         if len(texto) < 2:
             print(f"[DEBUG View] Texto insuficiente ({len(texto)} chars) -> Ocultar panel")
@@ -619,13 +820,7 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             return
 
         self.wrapper_resultados.grid(row=3, column=0, sticky="ew", padx=0, pady=(0, 10))
-
-        loading_label = ctk.CTkLabel(
-            self.fr_resultados,
-            text="🔍 Buscando...",
-            text_color=TM.text_secondary()
-        )
-        loading_label.pack(pady=10)
+        self.lbl_busqueda_loading.pack(pady=10)
 
         threading.Thread(target=self._buscar_hilo, args=(texto,), daemon=True).start()
 
@@ -639,24 +834,13 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         """Mostrar resultados de búsqueda en la UI"""
         print(f"[DEBUG View] _mostrar_resultados llamado con {len(resultados)} items")
 
-        for w in self.fr_resultados.winfo_children():
-            w.destroy()
+        self._limpiar_resultados()
 
         self.wrapper_resultados.grid(row=3, column=0, sticky="ew", padx=0, pady=(0, 10))
         self.wrapper_resultados.lift()
 
         if not resultados:
-            btn = ctk.CTkButton(
-                self.fr_resultados,
-                text="⚠️ No se encontraron coincidencias",
-                anchor="w",
-                fg_color="transparent",
-                text_color=TM.text_secondary(),
-                hover_color=TM.bg_panel(),
-                state="disabled",
-                height=35
-            )
-            btn.pack(fill="x", pady=2, padx=5)
+            self.lbl_busqueda_empty.pack(pady=10)
             return
 
         print(f"[DEBUG View] Renderizando {len(resultados)} resultados")
@@ -710,8 +894,16 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
 
         self.entry_busqueda.delete(0, 'end')
         self.wrapper_resultados.grid_forget()
+        self._limpiar_resultados()
+
+    def _limpiar_resultados(self):
+        """Limpia solo los items de resultados de busqueda."""
         for w in self.fr_resultados.winfo_children():
+            if w in (self.lbl_busqueda_loading, self.lbl_busqueda_empty):
+                continue
             w.destroy()
+        self.lbl_busqueda_loading.pack_forget()
+        self.lbl_busqueda_empty.pack_forget()
 
     # ================= IMPLEMENTACIÓN MIXIN =================
 
@@ -722,18 +914,25 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
 
         id_asistencia = reg.get("id")
         alumno_id = reg.get("alumno_id")
-        nombre = f"Alumno {alumno_id}"
-        codigo = str(alumno_id)
 
-        if hasattr(self.controller, 'mapa_alumnos') and alumno_id in self.controller.mapa_alumnos:
+        # El backend ya devuelve el objeto alumno anidado en la respuesta
+        alumno_data = reg.get("alumno") or {}
+        if alumno_data:
+            nombre = f"{alumno_data.get('nombres', '')} {alumno_data.get('apell_paterno', '')} {alumno_data.get('apell_materno', '')}".strip()
+            codigo = alumno_data.get("codigo_matricula") or ""
+            horario_raw = alumno_data.get("horario") or ""
+        elif hasattr(self.controller, 'mapa_alumnos') and alumno_id in self.controller.mapa_alumnos:
             a = self.controller.mapa_alumnos[alumno_id]
-            nombre = f"{a.get('nombres', '')} {a.get('apell_paterno', '')} {a.get('apell_materno', '')}".strip()
-            codigo = a.get("dni")
-        elif not hasattr(self.controller, 'mapa_alumnos'):
-            threading.Thread(target=self._cargar_cache_nombres, daemon=True).start()
+            nombre = f"{a.get('nombres', '')} {a.get('apell_paterno', '')} {a.get('apell_materno', '')}" .strip()
+            codigo = a.get("codigo_matricula") or ""
+            horario_raw = a.get("horario") or ""
+        else:
+            nombre = f"Alumno {alumno_id}"
+            codigo = ""
+            horario_raw = ""
 
-        turno = reg.get("turno", "MAÑANA")
-        estado = reg.get("estado", "Puntual")
+        turno = (reg.get("turno") or "MAÑANA").upper()
+        estado = (reg.get("estado") or "PUNTUAL").upper()
         hora = reg.get("hora", "")
         if isinstance(hora, str):
             hora = hora[:8]
@@ -766,25 +965,39 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             l.bind("<Button-1>", lambda e, r=row, d=reg: self._seleccionar_fila(e, r, d))
 
         lbl(codigo, self.ANCHOS[1], TM.text_secondary())
-        lbl(nombre, self.ANCHOS[2], TM.text(), "w")
+        lbl(nombre.upper(), self.ANCHOS[2], TM.text(), "w")
 
-        turno_icono = "🌅" if turno == "MAÑANA" else "🌆"
-        lbl(f"{turno_icono} {turno[0]}", self.ANCHOS[3], TM.primary())
+        # Horario del alumno: MATUTINO → M, VESPERTINO → V, DOBLE HORARIO → DH
+        h = horario_raw.upper()
+        if "DOBLE" in h:
+            horario_label = "DH"
+            horario_color = TM.warning()
+        elif "VESPERTINO" in h or h.startswith("V"):
+            horario_label = "V"
+            horario_color = "#9b59b6"
+        elif "MATUTINO" in h or h.startswith("M"):
+            horario_label = "M"
+            horario_color = TM.primary()
+        else:
+            horario_label = "?"
+            horario_color = TM.text_secondary()
+        lbl(horario_label, self.ANCHOS[3], horario_color)
 
-        # Badge Estado
+        # Badge Estado — backend devuelve: "Puntual", "Tarde", "Falta"
         bg_st = TM.bg_panel()
-        if "PUNTUAL" in estado:
+        estado_u = estado.upper()
+        if "PUNTUAL" in estado_u:
             bg_st = st.Colors.PUNTUAL
-        elif "TARDANZA" in estado:
+        elif "TARD" in estado_u:  # "Tarde" o "TARDANZA"
             bg_st = st.Colors.TARDANZA
-        elif "FALTA" in estado:
+        elif "FALTA" in estado_u or "INASIST" in estado_u:
             bg_st = st.Colors.FALTA
 
         f_st = ctk.CTkFrame(row, fg_color="transparent", width=self.ANCHOS[4], height=35)
         f_st.pack(side="left", padx=2)
         ctk.CTkLabel(
             f_st,
-            text=estado,
+            text=estado_u,
             fg_color=bg_st,
             text_color="white",
             width=80,

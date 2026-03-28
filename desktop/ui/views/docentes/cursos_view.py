@@ -22,6 +22,8 @@ class CursosView(ctk.CTkFrame):
     def __init__(self, parent, auth_client=None):
         super().__init__(parent, fg_color="transparent")
         self.controller = AcademicoController(auth_client.token if auth_client else "")
+        self.grupos_base = ["A", "B", "C", "D"]
+        self.grupo_todos = "TODOS"
 
         # Cache de datos para filtrado rápido
         self.todos_los_cursos = []
@@ -259,7 +261,7 @@ class CursosView(ctk.CTkFrame):
 
         # Crear tabs para cada grupo
         self.tabs_data = {}
-        for grupo in ["A", "B", "C", "D", "Único"]:
+        for grupo in [*self.grupos_base, self.grupo_todos]:
             tab = self.tab_grupos.add(grupo)
 
             # Scroll container para los CHIPS
@@ -357,7 +359,51 @@ class CursosView(ctk.CTkFrame):
             corner_radius=6,
             command=lambda c=curso: self.agregar_al_grupo_actual(c)
         )
-        btn.pack(side="right", padx=8)
+        btn.pack(side="right", padx=(4, 8))
+
+        # Botón eliminar del catálogo
+        btn_del_catalogo = ctk.CTkButton(
+            inner_frame,
+            text="🗑",
+            width=35,
+            height=28,
+            fg_color="transparent",
+            hover_color=TM.danger(),
+            text_color="#e74c3c",
+            font=CTkFont(family="Arial", size=13),
+            corner_radius=6,
+            command=lambda c=curso: self.eliminar_curso_catalogo(c)
+        )
+        btn_del_catalogo.pack(side="right", padx=(0, 4))
+
+    def eliminar_curso_catalogo(self, curso):
+        """Eliminar curso del catálogo general"""
+        if not isinstance(curso, dict):
+            messagebox.showerror("Error", "No se pudo leer el curso seleccionado")
+            return
+
+        curso_id = curso.get("id")
+        nombre = curso.get("nombre", "este curso")
+
+        if not curso_id:
+            messagebox.showerror("Error", "No se encontró el identificador del curso")
+            return
+
+        confirmado = messagebox.askyesno(
+            "Confirmar eliminación",
+            f"¿Eliminar '{nombre}' del catálogo?\n\n"
+            "Esta acción también quitará sus asignaciones de malla donde corresponda."
+        )
+        if not confirmado:
+            return
+
+        exito, msg = self.controller.eliminar_curso(curso_id)
+        if exito:
+            self.cargar_catalogo_bd()
+            self.cargar_mallas()
+            messagebox.showinfo("Éxito", msg)
+        else:
+            messagebox.showerror("Error", msg)
 
     def _mostrar_estado_vacio_catalogo(self, mensaje="Sin cursos registrados"):
         """Mostrar estado vacío en catálogo"""
@@ -398,8 +444,11 @@ class CursosView(ctk.CTkFrame):
             for w in scroll_widget.winfo_children():
                 w.destroy()
 
-            # Obtener cursos del grupo
-            asignaciones = self.controller.obtener_malla_grupo(grupo)
+            # En TODOS mostramos una vista consolidada sin acciones de borrado.
+            if grupo == self.grupo_todos:
+                asignaciones = self._obtener_malla_consolidada()
+            else:
+                asignaciones = self.controller.obtener_malla_grupo(grupo)
 
             if not asignaciones:
                 self._mostrar_estado_vacio_malla(scroll_widget, grupo)
@@ -455,24 +504,96 @@ class CursosView(ctk.CTkFrame):
         ).pack(side="left", fill="x", expand=True)
 
         # Botón eliminar
-        btn_del = ctk.CTkButton(
-            content,
-            text="✕",
-            width=28,
-            height=28,
-            fg_color="transparent",
-            hover_color=TM.danger(),
-            text_color="#e74c3c",
-            corner_radius=8,
-            font=CTkFont(family="Arial", size=14, weight="bold"),
-            command=lambda m=curso_item['malla_id']: self.quitar_curso(m)
+        if not curso_item.get("solo_lectura", False):
+            malla_id = self._obtener_malla_id(curso_item)
+            if malla_id is None:
+                return
+
+            btn_del = ctk.CTkButton(
+                content,
+                text="✕",
+                width=28,
+                height=28,
+                fg_color="transparent",
+                hover_color=TM.danger(),
+                text_color="#e74c3c",
+                corner_radius=8,
+                font=CTkFont(family="Arial", size=14, weight="bold"),
+                command=lambda m=malla_id: self.quitar_curso(m)
+            )
+            btn_del.pack(side="right")
+
+    def _obtener_malla_id(self, curso_item):
+        """Retornar id de asignación de malla con tolerancia de claves."""
+        return (
+            curso_item.get("malla_id")
+            or curso_item.get("id_malla")
+            or curso_item.get("asignacion_id")
+            or curso_item.get("id")
         )
-        btn_del.pack(side="right")
+
+    def _obtener_malla_consolidada(self):
+        """Construir vista TODOS con cursos que existen en A, B, C y D."""
+        claves_por_grupo = []
+        nombres_por_clave = {}
+
+        for grupo in self.grupos_base:
+            claves_grupo = set()
+            for item in self.controller.obtener_malla_grupo(grupo):
+                curso_id = item.get("curso_id")
+                if curso_id is None:
+                    curso_id = item.get("id")
+                clave = curso_id if curso_id is not None else item.get("nombre", "").strip().lower()
+
+                if clave is None:
+                    continue
+
+                claves_grupo.add(clave)
+                if clave not in nombres_por_clave:
+                    nombres_por_clave[clave] = item.get("nombre", "Curso sin nombre")
+
+            claves_por_grupo.append(claves_grupo)
+
+        if not claves_por_grupo:
+            return []
+
+        # SOLO cursos presentes en todos los grupos base.
+        claves_comunes = set.intersection(*claves_por_grupo)
+
+        return [
+            {
+                "nombre": nombres_por_clave.get(clave, "Curso sin nombre"),
+                "solo_lectura": True,
+            }
+            for clave in claves_comunes
+        ]
 
     def _mostrar_estado_vacio_malla(self, parent, grupo):
         """Mostrar estado vacío en malla"""
         empty_frame = ctk.CTkFrame(parent, fg_color="transparent")
         empty_frame.pack(fill="both", expand=True, pady=80)
+
+        if grupo == self.grupo_todos:
+            ctk.CTkLabel(
+                empty_frame,
+                text="📋",
+                font=CTkFont(family="Arial", size=70)
+            ).pack(pady=15)
+
+            ctk.CTkLabel(
+                empty_frame,
+                text="Sin cursos en la vista TODOS",
+                font=CTkFont(family="Roboto", size=15, weight="bold"),
+                text_color=TM.text()
+            ).pack()
+
+            ctk.CTkLabel(
+                empty_frame,
+                text="Agrega cursos aquí para asignarlos en A, B, C y D automáticamente",
+                font=CTkFont(family="Roboto", size=12),
+                text_color=TM.text_secondary()
+            ).pack(pady=(8, 0))
+            return
 
         ctk.CTkLabel(
             empty_frame,
@@ -501,8 +622,33 @@ class CursosView(ctk.CTkFrame):
     def agregar_al_grupo_actual(self, curso):
         """Añadir curso al grupo activo"""
         grupo_activo = self.tab_grupos.get()
+        curso_id = curso.get("id") if isinstance(curso, dict) else curso
 
-        exito, msg = self.controller.agregar_curso_a_grupo(grupo_activo, curso)
+        if not curso_id:
+            messagebox.showerror("Error", "No se pudo identificar el curso seleccionado")
+            return
+
+        if grupo_activo == self.grupo_todos:
+            errores = []
+            hubo_exito = False
+
+            for grupo in self.grupos_base:
+                exito, msg = self.controller.agregar_curso_a_grupo(grupo, curso_id)
+                if exito:
+                    hubo_exito = True
+                else:
+                    errores.append(f"{grupo}: {msg}")
+
+            if hubo_exito:
+                self.cargar_mallas()
+
+            if errores:
+                messagebox.showwarning("Aviso", "No se pudo asignar en todos los grupos:\n" + "\n".join(errores))
+            else:
+                messagebox.showinfo("Éxito", "Curso asignado en A, B, C y D")
+            return
+
+        exito, msg = self.controller.agregar_curso_a_grupo(grupo_activo, curso_id)
 
         if exito:
             self.cargar_mallas()
@@ -511,12 +657,10 @@ class CursosView(ctk.CTkFrame):
 
     def quitar_curso(self, malla_id):
         """Quitar curso del grupo"""
-        grupo_activo = self.tab_grupos.get()
-
         if not messagebox.askyesno("Confirmar", "¿Quitar esta materia del grupo?"):
             return
 
-        exito, msg = self.controller.quitar_curso_de_grupo(grupo_activo, malla_id)
+        exito, msg = self.controller.quitar_curso_de_grupo(malla_id)
 
         if exito:
             self.cargar_mallas()

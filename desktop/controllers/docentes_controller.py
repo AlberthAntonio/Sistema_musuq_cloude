@@ -112,14 +112,48 @@ class DocentesController:
         docentes = self.obtener_docentes(filtro="activos")
         return [d.get("nombre_completo", "") for d in docentes]
 
+    def obtener_docentes_por_curso(self, curso_id: int) -> List[str]:
+        """Retorna nombres de docentes que dictan un curso específico."""
+        if not curso_id:
+            return []
+
+        success, result = self.docentes_client.obtener_por_curso(curso_id)
+        if not success:
+            print(f"[ERROR] No se pudieron obtener docentes para el curso {curso_id}: {result}")
+            return []
+
+        docentes = result if isinstance(result, list) else result.get("items", [])
+        return [d.get("nombre_completo", "") for d in docentes]
+
     def buscar_por_nombre(self, nombre: str) -> Optional[Dict]:
         """Busca docente por nombre exacto"""
+        if not nombre:
+            return None
+
+        def _norm(txt: str) -> str:
+            return " ".join((txt or "").strip().lower().split())
+
+        objetivo = _norm(nombre)
+
         success, result = self.docentes_client.buscar(nombre)
         if success:
             docentes = result if isinstance(result, list) else result.get("items", [])
             for d in docentes:
-                if d.get("nombre_completo") == nombre:
+                if _norm(d.get("nombre_completo", "")) == objetivo:
                     return d
+            # Si no hay match exacto, aceptar un match parcial cuando solo hay 1 candidato
+            if len(docentes) == 1:
+                return docentes[0]
+            for d in docentes:
+                if objetivo and objetivo in _norm(d.get("nombre_completo", "")):
+                    return d
+
+        # Fallback: buscar en la lista completa (la API "buscar" no matchea "nombre completo")
+        docentes_full = self.obtener_docentes(limit=1000)
+        for d in docentes_full:
+            if _norm(d.get("nombre_completo", "")) == objetivo:
+                return d
+
         return None
 
     def eliminar_docente(self, docente_id: int) -> Tuple[bool, str]:
@@ -132,20 +166,35 @@ class DocentesController:
 
     def asignar_cursos(self, docente_id: int, curso_ids: List[int],
                        nombres: List[str] = None) -> Tuple[bool, str]:
-        """
-        Asigna una lista de cursos a un docente.
-        Cuando el backend esté listo, llamará al endpoint
-        POST /docentes/{id}/cursos  con los ids.
-        Por ahora registra localmente y retorna éxito.
-        """
+        """Asigna (reemplaza) los cursos de un docente usando la API real."""
         if not docente_id:
             return False, "Docente no válido"
 
-        # TODO: llamar al endpoint real cuando el backend esté listo
-        # success, result = self.docentes_client.asignar_cursos(docente_id, curso_ids)
-        # if not success:
-        #     return False, result.get("error", "Error al asignar cursos")
+        success, result = self.docentes_client.asignar_cursos(docente_id, curso_ids)
+        if not success:
+            return False, result.get("error", "Error al asignar cursos")
 
         n = len(nombres or curso_ids)
         return True, f"{n} curso(s) asignado(s) correctamente"
+
+    def obtener_cursos_docente(self, docente_id: int) -> List[Dict]:
+        """Obtiene los cursos actualmente asignados a un docente desde la API."""
+        if not docente_id:
+            return []
+
+        success, result = self.docentes_client.obtener_cursos_docente(docente_id)
+        if not success:
+            print(f"[ERROR] No se pudieron obtener cursos del docente {docente_id}: {result}")
+            return []
+
+        cursos = result if isinstance(result, list) else result.get("items", [])
+        # Normalizar por si el backend cambia ligeramente el esquema
+        return [
+            {
+                "id": c.get("id"),
+                "nombre": c.get("nombre", ""),
+                "descripcion": c.get("descripcion", ""),
+            }
+            for c in cursos
+        ]
 

@@ -217,12 +217,12 @@ class ReporteListasView(ctk.CTkFrame):
         ).pack(side="left", padx=4, expand=True, fill="x")
 
         # Contenedor fijo para loader + tabla
-        body_frame = ctk.CTkFrame(self.container_tabla, fg_color="transparent")
-        body_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        self.body_frame = ctk.CTkFrame(self.container_tabla, fg_color="transparent")
+        self.body_frame.pack(fill="both", expand=True, padx=6, pady=6)
 
         # Loader (mismo lugar siempre)
         self.lbl_loading = ctk.CTkLabel(
-            body_frame,
+            self.body_frame,
             text="⏳ Procesando solicitud...",
             text_color=TM.warning(),
             font=CTkFont(family="Roboto", size=14, weight="bold")
@@ -230,7 +230,7 @@ class ReporteListasView(ctk.CTkFrame):
 
         # Cuerpo scrollable
         self.scroll_tabla = ctk.CTkScrollableFrame(
-            body_frame,
+            self.body_frame,
             fg_color="transparent"
         )
         self.scroll_tabla.pack(fill="both", expand=True)
@@ -492,12 +492,11 @@ class ReporteListasView(ctk.CTkFrame):
         self.limpiar_tabla_visual()
 
         # Mostrar loader centrado
-        self.lbl_loading.place(relx=0.5, rely=0.5, anchor="center")
-        self.lbl_loading.lift()
+        self._mostrar_loading()
         self.update_idletasks()
 
         self.btn_cargar.configure(state="disabled")
-        self.lbl_vacio.pack_forget()
+        self._ocultar_vacio()
 
         grupo = self.cb_grupo.get()
         modalidad = self.cb_modalidad.get()
@@ -516,7 +515,7 @@ class ReporteListasView(ctk.CTkFrame):
 
     def _finalizar_carga(self, alumnos):
         """Main Thread - Actualiza UI con resultados."""
-        self.lbl_loading.place_forget()
+        self._ocultar_loading()
         self.btn_cargar.configure(state="normal")
 
         self.todos_los_alumnos = alumnos
@@ -524,8 +523,8 @@ class ReporteListasView(ctk.CTkFrame):
         self.cargando_lock = False
 
         if not alumnos:
-            self.lbl_vacio.pack(pady=20)
             self.lbl_vacio.configure(text="No se encontraron alumnos.")
+            self._mostrar_vacio()
             return
 
         # Renderizar primer lote y seleccionar todo
@@ -651,7 +650,20 @@ class ReporteListasView(ctk.CTkFrame):
         self.cantidad_mostrada = 0
         self.actualizar_contador()
         self.lbl_vacio.configure(text="Use los filtros para cargar datos.")
+        self._mostrar_vacio()
+
+    def _mostrar_loading(self):
+        self.lbl_loading.place(relx=0.5, rely=0.5, anchor="center")
+        self.lbl_loading.lift()
+
+    def _ocultar_loading(self):
+        self.lbl_loading.place_forget()
+
+    def _mostrar_vacio(self):
         self.lbl_vacio.pack(pady=20)
+
+    def _ocultar_vacio(self):
+        self.lbl_vacio.pack_forget()
 
     def seleccionar_todo(self):
         """Selecciona TODOS los alumnos (incluso los no visibles)."""

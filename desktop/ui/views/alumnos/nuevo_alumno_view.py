@@ -260,6 +260,42 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         self.crear_combo_grid(parent, "carrera", "Carrera *", [], row=0, col=1, on_change=self.actualizar_preview)
         self.crear_combo_grid(parent, "modalidad", "Modalidad *", ["PRIMERA OPCION", "ORDINARIO", "COLEGIO", "REFORZAMIENTO"], row=1, col=0, on_change=self.on_modalidad_change)
         self.crear_combo_grid(parent, "horario", "Horario", ["MATUTINO", "VESPERTINO", "DOBLE HORARIO"], row=1, col=1)
+
+        # --- CAMPOS COLEGIO: Nivel y Grado (ocultos por defecto) ---
+        self.fr_colegio = ctk.CTkFrame(parent, fg_color="transparent")
+        self.fr_colegio.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.fr_colegio.grid_columnconfigure(0, weight=1)
+        self.fr_colegio.grid_columnconfigure(1, weight=1)
+
+        # Nivel
+        fr_nivel = ctk.CTkFrame(self.fr_colegio, fg_color="transparent")
+        fr_nivel.grid(row=0, column=0, padx=10, pady=5, sticky="ew")
+        ctk.CTkLabel(fr_nivel, text="Nivel *", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TM.text(), anchor="w").pack(fill="x")
+        self.combos["nivel"] = ctk.CTkComboBox(
+            fr_nivel, values=["PRIMARIA", "SECUNDARIA"], height=35,
+            fg_color=TM.bg_panel(), border_color=TM.get_theme().border,
+            button_color=TM.primary(), dropdown_fg_color=TM.bg_panel(), corner_radius=6,
+            command=self.on_nivel_change
+        )
+        self.combos["nivel"].set("--Seleccione")
+        self.combos["nivel"].pack(fill="x", pady=(2, 0))
+
+        # Grado
+        fr_grado = ctk.CTkFrame(self.fr_colegio, fg_color="transparent")
+        fr_grado.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        ctk.CTkLabel(fr_grado, text="Grado *", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=TM.text(), anchor="w").pack(fill="x")
+        self.combos["grado"] = ctk.CTkComboBox(
+            fr_grado, values=[], height=35,
+            fg_color=TM.bg_panel(), border_color=TM.get_theme().border,
+            button_color=TM.primary(), dropdown_fg_color=TM.bg_panel(), corner_radius=6,
+            command=lambda _: self.actualizar_preview()
+        )
+        self.combos["grado"].set("--Seleccione")
+        self.combos["grado"].pack(fill="x", pady=(2, 0))
+
+        self.fr_colegio.grid_remove()  # Oculto por defecto
     
     def crear_campos_padres(self, parent):
         self.crear_campo_grid(parent, "padre_nombres", "Nombres", row=0, col=0, mayusculas=True)
@@ -303,6 +339,28 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         else:
             self.combos["horario"].configure(state="readonly")
             self.combos["horario"].set("MATUTINO")
+
+        # Mostrar u ocultar campos de colegio
+        if modalidad == "COLEGIO":
+            self.fr_colegio.grid()
+        else:
+            self.fr_colegio.grid_remove()
+            self.combos["nivel"].set("--Seleccione")
+            self.combos["grado"].configure(values=[])
+            self.combos["grado"].set("--Seleccione")
+
+        self.actualizar_preview()
+
+    def on_nivel_change(self, seleccion=None):
+        nivel = self.combos["nivel"].get()
+        if nivel == "PRIMARIA":
+            grados = ["1°", "2°", "3°", "4°", "5°", "6°"]
+        elif nivel == "SECUNDARIA":
+            grados = ["1°", "2°", "3°", "4°", "5°"]
+        else:
+            grados = []
+        self.combos["grado"].configure(values=grados)
+        self.combos["grado"].set(grados[0] if grados else "--Seleccione")
         self.actualizar_preview()
     
     def calcular_deuda(self, *args):
@@ -331,9 +389,11 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         grupo = self.combos["grupo"].get()
         carrera = self.combos["carrera"].get()
         modalidad = self.combos["modalidad"].get()
+        nivel = self.combos["nivel"].get() if modalidad == "COLEGIO" else None
+        grado = self.combos["grado"].get() if modalidad == "COLEGIO" else None
         
         # Actualizar componentes
-        self.preview_card.update_data(nombre_completo, dni, carrera, grupo, modalidad)
+        self.preview_card.update_data(nombre_completo, dni, carrera, grupo, modalidad, nivel, grado)
         
         try:
             costo = float(self.entries["costo"].get() or 0)
@@ -380,6 +440,8 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
             "carrera": self.combos["carrera"].get(),
             "modalidad": self.combos["modalidad"].get(),
             "horario": self.combos["horario"].get(),
+            "nivel": self.combos["nivel"].get() if self.combos["modalidad"].get() == "COLEGIO" else None,
+            "grado": self.combos["grado"].get() if self.combos["modalidad"].get() == "COLEGIO" else None,
             "nombre_padre_completo": nombre_padre if nombre_padre else None,
             "celular_padre_1": self.entries["celular1"].get().strip() or None,
             "celular_padre_2": self.entries["celular2"].get().strip() or None,
@@ -388,8 +450,8 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         }
         
         # Limpiar "--Seleccione"
-        for k in ["grupo", "carrera", "modalidad", "horario"]:
-            if datos[k] == "--Seleccione": datos[k] = None
+        for k in ["grupo", "carrera", "modalidad", "horario", "nivel", "grado"]:
+            if datos.get(k) == "--Seleccione": datos[k] = None
             
         return datos
 
@@ -457,7 +519,13 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
             self.entry_deuda.configure(state="normal")
             self.entry_deuda.delete(0, "end")
             self.entry_deuda.configure(state="disabled")
-            
+
+        # Ocultar campos de colegio
+        self.fr_colegio.grid_remove()
+        self.combos["nivel"].set("--Seleccione")
+        self.combos["grado"].configure(values=[])
+        self.combos["grado"].set("--Seleccione")
+
         # Resetear componentes
         self.preview_card.reset()
         self.audit_panel.reset()

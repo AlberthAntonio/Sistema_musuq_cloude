@@ -74,11 +74,25 @@ async def agregar_alumnos(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.delete("/{lista_id}/alumnos/{alumno_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def quitar_alumno_de_lista(
+    lista_id: int,
+    alumno_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """Quitar un alumno específico de una lista."""
+    try:
+        lista_service.quitar_alumno(db, lista_id, alumno_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.delete("/{lista_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def eliminar_lista(
     lista_id: int,
     db: Session = Depends(get_db),
-    current_user: Usuario = Depends(get_current_user)
+    current_user: Usuario = Depends(get_current_user),
 ):
     """Eliminar lista."""
     try:

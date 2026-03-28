@@ -26,6 +26,11 @@ from app.schemas.curso import (
     MallaCurricularBase, MallaCurricularCreate, MallaCurricularResponse
 )
 
+# Aula
+from app.schemas.aula import (
+    AulaBase, AulaCreate, AulaUpdate, AulaResponse, AulaHorarioCreate
+)
+
 # Docente
 from app.schemas.docente import (
     DocenteBase, DocenteCreate, DocenteUpdate,
@@ -61,8 +66,25 @@ from app.schemas.nota import (
     NotaResponse, NotasMasivas, NotaConDetalle
 )
 
+# Periodo Académico
+from app.schemas.periodo import (
+    PeriodoBase, PeriodoCreate, PeriodoUpdate, PeriodoResponse
+)
+
+# Matrícula
+from app.schemas.matricula import (
+    MatriculaBase, MatriculaCreate, MatriculaUpdate,
+    MatriculaResponse, MatriculaConAlumno
+)
+
+# Obligación de Pago
+from app.schemas.obligacion import (
+    ObligacionBase, ObligacionCreate, ObligacionUpdate,
+    ObligacionResponse, ObligacionConDetalle
+)
+
 # Pago
 from app.schemas.pago import (
     PagoBase, PagoCreate, PagoUpdate,
-    PagoResponse, PagoConAlumno, ResumenPagosAlumno
+    PagoResponse, PagoConDetalle, ResumenPagosMatricula
 )

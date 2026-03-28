@@ -453,12 +453,30 @@ class EstadoCuentaView(ctk.CTkFrame):
 
     def _crear_item_resultado(self, alumno):
         """Crear item de resultado"""
+        nombre = (
+            alumno.get("nombre_completo")
+            or alumno.get("alumno_nombre")
+            or alumno.get("nombre")
+            or (
+                f"{alumno.get('apellidos', '')}, {alumno.get('nombres', '')}".strip().strip(",")
+            )
+            or (
+                f"{alumno.get('apell_paterno', '')} {alumno.get('apell_materno', '')}, {alumno.get('nombres', '')}".strip().strip(",")
+            )
+            or "Alumno sin nombre"
+        )
+        dni = alumno.get("dni", "-")
+        alumno_id = alumno.get("id") or alumno.get("alumno_id")
+
+        if not alumno_id:
+            return
+
         item_frame = ctk.CTkFrame(self.scroll_lista, fg_color="transparent")
         item_frame.pack(fill="x", pady=1)
 
         btn = ctk.CTkButton(
             item_frame,
-            text=f"{alumno.apell_paterno} {alumno.nombres}\n📄 DNI: {alumno.dni}",
+            text=f"{nombre}\n📄 DNI: {dni}",
             fg_color="#2b2b2b",
             hover_color="#404040",
             border_width=0,
@@ -467,7 +485,7 @@ class EstadoCuentaView(ctk.CTkFrame):
             text_color=TM.text(),
             font=CTkFont(family="Roboto", size=11),
             corner_radius=8,
-            command=lambda: self.cargar_estado_cuenta(alumno.id)
+            command=lambda a_id=alumno_id: self.cargar_estado_cuenta(a_id)
         )
         btn.pack(fill="x")
 
@@ -535,7 +553,7 @@ class EstadoCuentaView(ctk.CTkFrame):
         # Fecha
         ctk.CTkLabel(
             row,
-            text=pago.fecha,
+            text=pago['fecha'],
             width=110,
             text_color="#555",
             font=CTkFont(family="Roboto Mono", size=10)
@@ -544,7 +562,7 @@ class EstadoCuentaView(ctk.CTkFrame):
         # Concepto
         ctk.CTkLabel(
             row,
-            text=pago.concepto,
+            text=pago['concepto'],
             text_color="#333",
             font=CTkFont(family="Roboto", size=11),
             anchor="w"
@@ -553,7 +571,7 @@ class EstadoCuentaView(ctk.CTkFrame):
         # Monto
         ctk.CTkLabel(
             row,
-            text=f"S/. {pago.monto:.2f}",
+            text=f"S/. {pago['monto']:.2f}",
             width=120,
             text_color="#27ae60",
             font=CTkFont(family="Roboto", size=11, weight="bold")

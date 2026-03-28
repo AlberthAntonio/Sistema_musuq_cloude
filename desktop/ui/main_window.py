@@ -132,6 +132,10 @@ class MainWindow(ctk.CTkFrame):
                      command=self.show_docentes_cursos).pack(fill="x", pady=1)
         SubMenuButton(self.submenus["docentes"], text="   • Horarios", 
                      command=self.show_docentes_horarios).pack(fill="x", pady=1)
+        SubMenuButton(self.submenus["docentes"], text="   • Aulas", 
+                     command=self.show_docentes_aulas).pack(fill="x", pady=1)
+        SubMenuButton(self.submenus["docentes"], text="   • Resumen Docente", 
+                 command=self.show_docentes_resumen).pack(fill="x", pady=1)
         
         # 4. 📅 ASISTENCIA ============================================================================================ 
         self.nav_buttons["asistencia"] = NavButton(
@@ -307,7 +311,8 @@ class MainWindow(ctk.CTkFrame):
         """Mostrar una vista (con caché)"""
         self.clear_content()
         
-        if view_key not in self.views_cache:
+        is_new = view_key not in self.views_cache
+        if is_new:
             try:
                 self.views_cache[view_key] = view_class(
                     self.content_area,
@@ -325,8 +330,8 @@ class MainWindow(ctk.CTkFrame):
         self.current_view = self.views_cache[view_key]
         self.current_view.pack(fill="both", expand=True)
         
-        # Refrescar si tiene método
-        if hasattr(self.current_view, 'refresh'):
+        # Refrescar solo si la vista ya estaba cacheada (evita doble carga en primer acceso)
+        if not is_new and hasattr(self.current_view, 'refresh'):
             self.current_view.refresh()
     
     def show_placeholder(self, text: str):
@@ -405,6 +410,19 @@ class MainWindow(ctk.CTkFrame):
         from ui.views.docentes.horarios_view import HorariosView
         self.show_view(HorariosView, "docentes_horarios")
 
+    def show_docentes_aulas(self):
+        """Mostrar gestión de aulas"""
+        self.set_active_nav("docentes")
+        from ui.views.docentes.crear_aulas_view import CrearAulasView
+        self.show_view(CrearAulasView, "docentes_aulas")
+
+    def show_docentes_resumen(self):
+        """Mostrar resumen de docente como vista en el área principal."""
+        self.set_active_nav("docentes")
+        from ui.views.docentes.resumen_docentes_view import ResumenDocentePanel
+        # Por ahora se muestra solo la estructura visual, sin docente específico.
+        self.show_view(ResumenDocentePanel, "docentes_resumen")
+
 
     # -------------Asistencia-------------
     def show_asistencia_toma(self):
@@ -454,7 +472,7 @@ class MainWindow(ctk.CTkFrame):
     def show_academico_constancias(self):
         """Mostrar generador de constancias"""
         self.set_active_nav("academico")
-        from desktop.ui.views.academico.doc_constancias import ConstanciasView
+        from ui.views.academico.doc_constancias import ConstanciasView
         self.show_view(ConstanciasView, "academico_constancias")
 
     

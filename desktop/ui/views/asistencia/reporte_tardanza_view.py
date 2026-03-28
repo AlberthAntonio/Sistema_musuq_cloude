@@ -142,6 +142,10 @@ class ReporteTardanzaView(ctk.CTkFrame):
         )
         self.lbl_nav_info.pack(padx=10, pady=5)
 
+        # Contenedor de tabs (botones)
+        self.fr_nav_tabs = ctk.CTkFrame(self.fr_nav_fechas, fg_color="transparent")
+        self.fr_nav_tabs.pack_forget()
+
         # ============================
         # 4. TABLA DE RESULTADOS
         # ============================
@@ -393,10 +397,8 @@ class ReporteTardanzaView(ctk.CTkFrame):
         self.update_idletasks()
 
         # Limpiar tabla y tabs
-        for w in self.scroll_tabla.winfo_children():
-            w.destroy()
-        for w in self.fr_nav_fechas.winfo_children():
-            w.destroy()
+        self._limpiar_tabla()
+        self._limpiar_nav_tabs()
 
         # Parámetros
         params = {
@@ -471,12 +473,7 @@ class ReporteTardanzaView(ctk.CTkFrame):
 
         if not resultado or not resultado["fechas_ordenadas"]:
             self._mostrar_estado_vacio("✅ No se encontraron tardanzas en este rango")
-            ctk.CTkLabel(
-                self.fr_nav_fechas,
-                text="Sin resultados",
-                text_color=TM.text_secondary(),
-                font=ctk.CTkFont(family="Roboto", size=11)
-            ).pack(pady=5)
+            self._mostrar_nav_info("Sin resultados")
             return
 
         # Guardar datos
@@ -484,13 +481,15 @@ class ReporteTardanzaView(ctk.CTkFrame):
         fechas = resultado["fechas_ordenadas"]
         self.botones_fecha = {}
 
+        self._mostrar_nav_tabs()
+
         # Crear botones de pestañas
         for fecha in fechas:
             cant = len(self.datos_por_fecha[fecha])
             texto_btn = f"{fecha}\n({cant})"
 
             btn = ctk.CTkButton(
-                self.fr_nav_fechas,
+            self.fr_nav_tabs,
                 text=texto_btn,
                 width=100,
                 height=40,
@@ -527,8 +526,7 @@ class ReporteTardanzaView(ctk.CTkFrame):
         )
 
         # 2. Limpiar tabla
-        for widget in self.scroll_tabla.winfo_children():
-            widget.destroy()
+        self._limpiar_tabla()
 
         # 3. Resetear variables de scroll infinito
         self.registros_cache_tab = []
@@ -775,30 +773,42 @@ class ReporteTardanzaView(ctk.CTkFrame):
 
     def _mostrar_estado_vacio(self, mensaje):
         """Mostrar estado vacío elegante"""
-        empty_frame = ctk.CTkFrame(self.scroll_tabla, fg_color="transparent")
-        empty_frame.pack(fill="both", expand=True, pady=60)
+        self._limpiar_tabla()
+        self.lbl_vacio.configure(text=f"\n{mensaje}")
+        self.lbl_vacio.pack(pady=40)
 
-        # Icono
-        ctk.CTkLabel(
-            empty_frame,
-            text="📭",
-            font=ctk.CTkFont(family="Arial", size=60)
-        ).pack(pady=10)
+    def _limpiar_tabla(self):
+        """Limpia solo los items de la tabla."""
+        for w in self.scroll_tabla.winfo_children():
+            if w in (self.lbl_vacio, self.lbl_cargando_mas):
+                continue
+            w.destroy()
+        self.lbl_vacio.pack_forget()
+        try:
+            self.lbl_cargando_mas.pack_forget()
+        except Exception:
+            pass
 
-        # Mensaje
-        ctk.CTkLabel(
-            empty_frame,
-            text=mensaje,
-            font=ctk.CTkFont(family="Roboto", size=16, weight="bold"),
-            text_color=TM.text()
-        ).pack()
+    def _limpiar_nav_tabs(self):
+        """Limpia tabs y muestra info por defecto."""
+        for w in self.fr_nav_tabs.winfo_children():
+            w.destroy()
+        self.fr_nav_tabs.pack_forget()
+        self.lbl_nav_info.configure(
+            text="Seleccione un rango y busque para ver los días disponibles"
+        )
+        self.lbl_nav_info.pack(padx=10, pady=5)
 
-        ctk.CTkLabel(
-            empty_frame,
-            text="Ajuste los filtros e intente nuevamente",
-            font=ctk.CTkFont(family="Roboto", size=12),
-            text_color=TM.text_secondary()
-        ).pack(pady=(5, 0))
+    def _mostrar_nav_info(self, texto):
+        """Muestra un mensaje informativo en la barra de navegación."""
+        self.fr_nav_tabs.pack_forget()
+        self.lbl_nav_info.configure(text=texto)
+        self.lbl_nav_info.pack(padx=10, pady=5)
+
+    def _mostrar_nav_tabs(self):
+        """Muestra el contenedor de tabs y oculta el mensaje."""
+        self.lbl_nav_info.pack_forget()
+        self.fr_nav_tabs.pack(side="left")
 
     # ========================================================
     # FUNCIONALIDADES ADICIONALES

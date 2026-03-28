@@ -8,7 +8,7 @@ from tkinter import messagebox
 import threading
 from typing import Dict, List, Optional, Callable
 
-from core.api_client import APIClient, AlumnoClient
+from core.api_client import APIClient, AlumnoClient, MatriculasClient
 from core.theme_manager import ThemeManager as TM
 from styles import tabla_style as st
 
@@ -22,6 +22,8 @@ class AlumnosListPanel(ctk.CTkFrame):
         self.auth_client = auth_client
         self.alumno_client = AlumnoClient()
         self.alumno_client.token = auth_client.token
+        self.matricula_client = MatriculasClient()
+        self.matricula_client.token = auth_client.token
         
         # Cache de datos
         self.alumnos_cache: List[Dict] = []
@@ -35,7 +37,7 @@ class AlumnosListPanel(ctk.CTkFrame):
         self.datos_seleccionados: Optional[Dict] = None
         
         # Anchos de columnas
-        self.ANCHOS = [80, 90, 280, 120, 50, 110]
+        self.ANCHOS = [70, 82, 190, 100, 40, 110, 135]
         
         self.create_widgets()
         self.cargar_datos_thread()
@@ -60,82 +62,154 @@ class AlumnosListPanel(ctk.CTkFrame):
             text_color=TM.text()
         ).pack(anchor="w", pady=(0, 15))
         
-        # ==================== BARRA DE FILTROS ====================
+        # ==================== BARRA DE FILTROS (2 filas) ====================
         fr_filtros = ctk.CTkFrame(
             panel_izq,
-            height=50,
             fg_color=TM.bg_card(),
             corner_radius=10
         )
         fr_filtros.pack(fill="x", pady=(0, 10))
-        
-        # Icono búsqueda
+
+        # --- FILA 1: Búsqueda ---
+        fr_fila1 = ctk.CTkFrame(fr_filtros, fg_color="transparent")
+        fr_fila1.pack(fill="x", padx=10, pady=(8, 4))
+
         ctk.CTkLabel(
-            fr_filtros,
+            fr_fila1,
             text="🔍",
             text_color=TM.text_secondary()
-        ).pack(side="left", padx=(15, 5))
-        
-        # Entry búsqueda
+        ).pack(side="left", padx=(0, 5))
+
         self.entry_buscar = ctk.CTkEntry(
-            fr_filtros,
-            placeholder_text="Buscar por DNI, Nombre...",
-            width=220,
+            fr_fila1,
+            placeholder_text="Buscar por DNI, Nombre, Código...",
             height=35,
             border_width=0,
             fg_color=TM.bg_panel(),
             text_color=TM.text()
         )
-        self.entry_buscar.pack(side="left", padx=5, pady=8)
+        self.entry_buscar.pack(side="left", fill="x", expand=True)
         self.entry_buscar.bind("<KeyRelease>", self.filtrar_tabla)
-        
-        # Separador
-        ctk.CTkFrame(fr_filtros, width=2, height=25, fg_color="#505050").pack(side="left", padx=10)
-        
+
+        ctk.CTkFrame(fr_fila1, width=2, height=22, fg_color="#505050").pack(side="left", padx=10)
+
+        # Filtro Estado (junto a búsqueda)
+        ctk.CTkLabel(
+            fr_fila1,
+            text="Estado:",
+            text_color=TM.text_secondary(),
+            font=ctk.CTkFont(size=11)
+        ).pack(side="left", padx=(0, 2))
+
+        self.cbo_estado = ctk.CTkComboBox(
+            fr_fila1,
+            values=["Todos", "Activo", "Inactivo"],
+            width=110,
+            command=lambda _: self.filtrar_tabla()
+        )
+        self.cbo_estado.set("Todos")
+        self.cbo_estado.pack(side="left")
+
+        # --- FILA 2: Filtros ---
+        fr_fila2 = ctk.CTkFrame(fr_filtros, fg_color="transparent")
+        fr_fila2.pack(fill="x", padx=10, pady=(0, 8))
+
         # Filtro Grupo
         ctk.CTkLabel(
-            fr_filtros,
+            fr_fila2,
             text="Grupo:",
             text_color=TM.text_secondary(),
             font=ctk.CTkFont(size=11)
-        ).pack(side="left", padx=(5, 2))
-        
+        ).pack(side="left", padx=(0, 2))
+
         self.cbo_grupo = ctk.CTkComboBox(
-            fr_filtros,
+            fr_fila2,
             values=["Todos", "A", "B", "C", "D"],
             width=80,
             command=lambda _: self.filtrar_tabla()
         )
         self.cbo_grupo.set("Todos")
-        self.cbo_grupo.pack(side="left", padx=5)
-        
-        # Filtro Estado
+        self.cbo_grupo.pack(side="left", padx=(0, 10))
+
+        # Separador
+        ctk.CTkFrame(fr_fila2, width=2, height=22, fg_color="#505050").pack(side="left", padx=(0, 10))
+
+        # Filtro Horario
         ctk.CTkLabel(
-            fr_filtros,
-            text="Estado:",
+            fr_fila2,
+            text="Horario:",
             text_color=TM.text_secondary(),
             font=ctk.CTkFont(size=11)
-        ).pack(side="left", padx=(10, 2))
-        
-        self.cbo_estado = ctk.CTkComboBox(
-            fr_filtros,
-            values=["Todos", "Activo", "Inactivo"],
-            width=100,
+        ).pack(side="left", padx=(0, 2))
+
+        self.cbo_horario = ctk.CTkComboBox(
+            fr_fila2,
+            values=["Todos", "MATUTINO", "VESPERTINO", "DOBLE HORARIO"],
+            width=145,
             command=lambda _: self.filtrar_tabla()
         )
-        self.cbo_estado.set("Todos")
-        self.cbo_estado.pack(side="left", padx=5)
-        
-        # Botón actualizar
+        self.cbo_horario.set("Todos")
+        self.cbo_horario.pack(side="left", padx=(0, 10))
+
+        # Separador
+        ctk.CTkFrame(fr_fila2, width=2, height=22, fg_color="#505050").pack(side="left", padx=(0, 10))
+
+        # Filtro Modalidad
+        ctk.CTkLabel(
+            fr_fila2,
+            text="Modalidad:",
+            text_color=TM.text_secondary(),
+            font=ctk.CTkFont(size=11)
+        ).pack(side="left", padx=(0, 2))
+
+        self.cbo_modalidad = ctk.CTkComboBox(
+            fr_fila2,
+            values=["Todos", "PRIMERA OPCION", "ORDINARIO", "COLEGIO", "REFORZAMIENTO"],
+            width=155,
+            command=self.on_modalidad_change
+        )
+        self.cbo_modalidad.set("Todos")
+        self.cbo_modalidad.pack(side="left", padx=(0, 10))
+
+        # Filtro condicional para modalidad COLEGIO
+        self.fr_filtro_colegio = ctk.CTkFrame(fr_fila2, fg_color="transparent")
+        self.fr_filtro_colegio.pack(side="left", padx=(0, 10))
+
+        ctk.CTkFrame(self.fr_filtro_colegio, width=2, height=22, fg_color="#505050").pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(
+            self.fr_filtro_colegio,
+            text="Nivel/Grado:",
+            text_color=TM.text_secondary(),
+            font=ctk.CTkFont(size=11)
+        ).pack(side="left", padx=(0, 2))
+
+        self.cbo_nivel_grado = ctk.CTkComboBox(
+            self.fr_filtro_colegio,
+            values=["Todos"],
+            width=165,
+            command=lambda _: self.filtrar_tabla(),
+            fg_color=TM.bg_panel(),
+            border_color=TM.get_theme().border,
+            button_color=TM.primary(),
+            dropdown_fg_color=TM.bg_panel(),
+            corner_radius=6
+        )
+        self.cbo_nivel_grado.set("Todos")
+        self.cbo_nivel_grado.pack(side="left")
+        self.fr_filtro_colegio.pack_forget()
+
+
+        # Botón actualizar (extremo derecho fila 2)
         self.btn_actualizar = ctk.CTkButton(
-            fr_filtros,
+            fr_fila2,
             text="🔄",
             width=40,
             fg_color="#404040",
             hover_color="#505050",
             command=self.cargar_datos_thread
         )
-        self.btn_actualizar.pack(side="right", padx=10)
+        self.btn_actualizar.pack(side="right")
         
         # ==================== TABLA ====================
         fr_tabla = ctk.CTkFrame(
@@ -227,6 +301,41 @@ class AlumnosListPanel(ctk.CTkFrame):
             text_color=TM.text()
         )
         self.lbl_total.pack(pady=5)
+
+    def on_modalidad_change(self, seleccion=None):
+        """Mostrar filtros condicionales según modalidad"""
+        modalidad = self.cbo_modalidad.get()
+
+        if modalidad == "COLEGIO":
+            self._actualizar_opciones_nivel_grado()
+            self.fr_filtro_colegio.pack(side="left", padx=(0, 10), before=self.btn_actualizar)
+        else:
+            self.fr_filtro_colegio.pack_forget()
+            self.cbo_nivel_grado.set("Todos")
+
+        self.filtrar_tabla()
+
+    def _actualizar_opciones_nivel_grado(self):
+        """Cargar opciones de nivel/grado para modalidad colegio"""
+        opciones = {"Todos"}
+        for alumno in self.alumnos_cache:
+            if str(alumno.get("modalidad", "") or "").upper() != "COLEGIO":
+                continue
+
+            nivel = str(alumno.get("nivel", "") or "").strip().upper()
+            grado = str(alumno.get("grado", "") or "").strip().upper()
+            valor = f"{nivel} {grado}".strip()
+            if valor:
+                opciones.add(valor)
+
+        opciones_ordenadas = ["Todos"] + sorted(opciones - {"Todos"})
+        valor_actual = self.cbo_nivel_grado.get()
+        self.cbo_nivel_grado.configure(values=opciones_ordenadas)
+
+        if valor_actual in opciones_ordenadas:
+            self.cbo_nivel_grado.set(valor_actual)
+        else:
+            self.cbo_nivel_grado.set("Todos")
     
     def crear_cabecera(self, parent):
         """Crear cabecera de la tabla"""
@@ -238,7 +347,7 @@ class AlumnosListPanel(ctk.CTkFrame):
         )
         header.pack(fill="x", padx=5, pady=(5, 0))
         
-        titulos = ["CÓDIGO", "DNI", "ALUMNO", "MODALIDAD", "GRP", "CELULAR"]
+        titulos = ["CÓDIGO", "DNI", "ALUMNO", "MODALIDAD", "GRP", "HORARIO", "CARRERA"]
         for i, titulo in enumerate(titulos):
             ctk.CTkLabel(
                 header,
@@ -282,24 +391,31 @@ class AlumnosListPanel(ctk.CTkFrame):
         celda(alumno.get("codigo_matricula", "-"), self.ANCHOS[0])
         celda(alumno.get("dni", "-"), self.ANCHOS[1], TM.text_secondary())
         
-        # Nombre completo
-        nombre = f"{alumno.get('nombres', '')}, {alumno.get('apell_paterno', '')} {alumno.get('apell_materno', '')}"
-        celda(nombre.strip(), self.ANCHOS[2], TM.text(), "w")
+        # Nombre completo (truncado para que no desborde)
+        nombre_raw = f"{alumno.get('nombres', '')}, {alumno.get('apell_paterno', '')} {alumno.get('apell_materno', '')}"
+        nombre = nombre_raw.strip()[:32] + "…" if len(nombre_raw.strip()) > 32 else nombre_raw.strip()
+        celda(nombre, self.ANCHOS[2], TM.text(), "w")
         
         celda(alumno.get("modalidad", "-"), self.ANCHOS[3], TM.text_secondary())
         
         # Grupo con color
         lbl_grp = ctk.CTkLabel(
             row,
-            text=alumno.get("grupo", "-"),
+            text=alumno.get("grupo", "-") or "-",
             width=self.ANCHOS[4],
             text_color="#f1c40f",
             font=ctk.CTkFont(family="Arial", size=11, weight="bold")
         )
         lbl_grp.pack(side="left", padx=2)
         lbl_grp.bind("<Button-1>", on_click)
+
+        # Horario
+        celda(alumno.get("horario", "-"), self.ANCHOS[5], TM.text_secondary())
         
-        celda(alumno.get("celular", "-"), self.ANCHOS[5], TM.text_secondary())
+        # Carrera (truncada si es larga)
+        carrera_raw = str(alumno.get("carrera", "-") or "-")
+        carrera = carrera_raw[:22] + "…" if len(carrera_raw) > 22 else carrera_raw
+        celda(carrera, self.ANCHOS[6], TM.text_secondary())
     
     def seleccionar_fila(self, widget: ctk.CTkFrame, datos: Dict):
         """Seleccionar una fila"""
@@ -326,29 +442,61 @@ class AlumnosListPanel(ctk.CTkFrame):
         # Limpiar tabla
         self.fila_seleccionada = None
         self.datos_seleccionados = None
-        for widget in self.scroll_tabla.winfo_children():
-            widget.destroy()
+        self._limpiar_tabla()
         
         threading.Thread(target=self._traer_datos, daemon=True).start()
     
     def _traer_datos(self):
-        """Traer datos del backend"""
-        success, data = self.alumno_client.obtener_todos(limit=1000)
-        
-        if success:
-            # El backend puede devolver lista u objeto con items
-            if isinstance(data, list):
-                alumnos = data
-            else:
-                alumnos = data.get("items", []) if isinstance(data, dict) else []
-            
-            self.after(0, lambda: self._finalizar_carga(alumnos))
-        else:
-            self.after(0, lambda: self._error_carga(data.get("error", "Error desconocido")))
+        """Traer datos del backend combinando alumnos + matrículas"""
+        ok_a, data_a = self.alumno_client.obtener_todos(limit=1000)
+
+        if not ok_a:
+            msg = data_a.get("error", "Error al cargar alumnos") if isinstance(data_a, dict) else str(data_a)
+            self.after(0, lambda: self._error_carga(msg))
+            return
+
+        # Normalizar lista de alumnos
+        alumnos = data_a if isinstance(data_a, list) else data_a.get("items", []) if isinstance(data_a, dict) else []
+
+        # Obtener matrículas (sin filtro de estado para máxima cobertura)
+        ok_m, data_m = self.matricula_client.listar(limit=2000, estado=None)
+        if not ok_m:
+            ok_m, data_m = self.matricula_client.listar(limit=2000, estado="activo")
+
+        # Construir índice alumno_id -> datos de matrícula (prioriza estado activo)
+        matriculas_idx: Dict[int, Dict] = {}
+        if ok_m:
+            mats = data_m if isinstance(data_m, list) else data_m.get("items", []) if isinstance(data_m, dict) else []
+            for m in mats:
+                aid = m.get("alumno_id")
+                if aid is not None:
+                    existing = matriculas_idx.get(int(aid))
+                    if not existing or m.get("estado") == "activo":
+                        matriculas_idx[int(aid)] = m
+
+        # Combinar: enriquecer cada alumno con datos de su matrícula
+        combinados = []
+        for alumno in alumnos:
+            alumno_id = int(alumno.get("id", 0))
+            mat = matriculas_idx.get(alumno_id, {})
+            combinados.append({
+                **alumno,
+                "codigo_matricula": mat.get("codigo_matricula") or "-",
+                "modalidad":        mat.get("modalidad") or "-",
+                "grupo":            mat.get("grupo") or "-",
+                "carrera":          mat.get("carrera") or "-",
+                "horario":          mat.get("horario") or "-",
+                "nivel":            mat.get("nivel") or "-",
+                "grado":            mat.get("grado") or "-",
+                "_matricula_id":    mat.get("id"),
+            })
+
+        self.after(0, lambda: self._finalizar_carga(combinados))
     
     def _finalizar_carga(self, datos: List[Dict]):
         """Finalizar carga y renderizar"""
         self.alumnos_cache = datos
+        self._actualizar_opciones_nivel_grado()
         self.lbl_loader.pack_forget()
         self.btn_actualizar.configure(state="normal")
         self.filtrar_tabla()
@@ -364,10 +512,12 @@ class AlumnosListPanel(ctk.CTkFrame):
         texto = self.entry_buscar.get().lower()
         grupo_sel = self.cbo_grupo.get()
         estado_sel = self.cbo_estado.get()
-        
+        horario_sel = self.cbo_horario.get()
+        modalidad_sel = self.cbo_modalidad.get()
+        nivel_grado_sel = self.cbo_nivel_grado.get()
+
         # Limpiar tabla
-        for widget in self.scroll_tabla.winfo_children():
-            widget.destroy()
+        self._limpiar_tabla()
         
         # Filtrar
         self.alumnos_filtrados = []
@@ -382,7 +532,27 @@ class AlumnosListPanel(ctk.CTkFrame):
                 continue
             if estado_sel == "Inactivo" and alumno.get("activo", True):
                 continue
-            
+
+            # Filtro horario
+            if horario_sel != "Todos":
+                db_horario = str(alumno.get("horario", "") or "").upper()
+                if db_horario != horario_sel:
+                    continue
+
+            # Filtro modalidad
+            if modalidad_sel != "Todos":
+                db_modalidad = str(alumno.get("modalidad", "") or "").upper()
+                if db_modalidad != modalidad_sel:
+                    continue
+
+            # Filtro nivel/grado (solo cuando aplica COLEGIO)
+            if modalidad_sel == "COLEGIO" and nivel_grado_sel != "Todos":
+                db_nivel = str(alumno.get("nivel", "") or "").strip().upper()
+                db_grado = str(alumno.get("grado", "") or "").strip().upper()
+                db_nivel_grado = f"{db_nivel} {db_grado}".strip()
+                if db_nivel_grado != nivel_grado_sel:
+                    continue
+
             # Filtro texto
             nombre = f"{alumno.get('nombres', '')} {alumno.get('apell_paterno', '')} {alumno.get('apell_materno', '')}".lower()
             codigo = str(alumno.get("codigo_matricula", "")).lower()
@@ -470,3 +640,8 @@ class AlumnosListPanel(ctk.CTkFrame):
     def refresh(self):
         """Refrescar datos"""
         self.cargar_datos_thread()
+
+    def _limpiar_tabla(self):
+        """Limpiar solo las filas del scroll."""
+        for widget in self.scroll_tabla.winfo_children():
+            widget.destroy()

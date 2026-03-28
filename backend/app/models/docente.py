@@ -36,6 +36,20 @@ class Docente(Base):
     
     # Relaciones
     horarios = relationship("Horario", back_populates="docente", cascade="all, delete-orphan")
+
+    # Relación muchos-a-muchos con cursos a través de DocenteCurso
+    docente_cursos = relationship(
+        "DocenteCurso",
+        back_populates="docente",
+        cascade="all, delete-orphan"
+    )
+
+    # Acceso de solo lectura a los cursos asociados
+    cursos = relationship(
+        "Curso",
+        secondary="docente_curso",
+        viewonly=True
+    )
     
     @property
     def nombre_completo(self) -> str:

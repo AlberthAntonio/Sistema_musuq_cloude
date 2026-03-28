@@ -1,10 +1,13 @@
 # app/utils/audio_helper.py
 
-import os
 import sys
+import math
+import struct
+import tempfile
+import os
 from pathlib import Path
 
-# Intentar importar librerías de audio
+# Intentar importar winsound (Windows) o pygame como fallback
 try:
     import winsound
     AUDIO_ENGINE = "winsound"
@@ -16,112 +19,123 @@ except ImportError:
     except ImportError:
         AUDIO_ENGINE = None
 
+
+def _generar_wav(patrones: list, sample_rate: int = 44100) -> bytes:
+    """
+    Genera bytes de un archivo WAV PCM en memoria.
+
+    patrones: lista de tuplas (frecuencia_hz, duracion_ms)
+              frecuencia=0 → silencio (pausa)
+    """
+    muestras = []
+    for frecuencia, duracion_ms in patrones:
+        n_muestras = int(sample_rate * duracion_ms / 1000)
+        if frecuencia == 0:
+            muestras.extend([0] * n_muestras)
+        else:
+            fade = max(1, int(sample_rate * 0.005))  # 5ms fade in/out para evitar clic
+            for i in range(n_muestras):
+                amp = 32767
+                if i < fade:
+                    amp = int(32767 * i / fade)
+                elif i > n_muestras - fade:
+                    amp = int(32767 * (n_muestras - i) / fade)
+                val = int(amp * math.sin(2 * math.pi * frecuencia * i / sample_rate))
+                muestras.append(max(-32768, min(32767, val)))
+
+    data = struct.pack(f"<{len(muestras)}h", *muestras)
+
+    nc  = 1
+    bps = 16
+    br  = sample_rate * nc * bps // 8
+    ba  = nc * bps // 8
+
+    hdr = (
+        b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVE"
+        + b"fmt " + struct.pack("<IHHIIHH", 16, 1, nc, sample_rate, br, ba, bps)
+        + b"data" + struct.pack("<I", len(data))
+    )
+    return hdr + data
+
+
+def _guardar_temp(wav_bytes: bytes, sufijo: str) -> str:
+    """Guarda bytes WAV en un archivo temporal y devuelve su ruta."""
+    fd, path = tempfile.mkstemp(suffix=f"_{sufijo}.wav", prefix="musuq_")
+    os.close(fd)
+    with open(path, "wb") as f:
+        f.write(wav_bytes)
+    return path
+
+
 class AudioHelper:
-    """Manejador de sonidos de alerta con fallback a beeps del sistema"""
-    
+    """
+    Reproduce sonidos usando archivos WAV temporales generados en memoria.
+    Usa SND_FILENAME | SND_ASYNC → verdaderamente asíncrono, no bloquea la UI
+    y funciona aunque grab_set() esté activo en un modal.
+    Los archivos temporales se crean una sola vez al instanciar la clase.
+    """
+
     def __init__(self):
-        # Ruta base del proyecto
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             base_path = Path(sys._MEIPASS)
         else:
             base_path = Path(__file__).parent.parent
-        
+
         self.sounds_path = base_path / "assets" / "sounds"
         self.sounds_path.mkdir(parents=True, exist_ok=True)
-        
-        # Archivos de sonido
+
+        # Archivos WAV externos opcionales (si existen, se usan en lugar de los generados)
         self.alerta_turno_file = self.sounds_path / "alerta_turno_cruzado.wav"
         self.alerta_error_file = self.sounds_path / "alerta_error.wav"
-    
+
+        # Generar y guardar los WAVs sintéticos como archivos temporales
+        self._tmp_exito        = _guardar_temp(_generar_wav([(1200, 120)]),                                "exito")
+        self._tmp_turno_cruzado = _guardar_temp(_generar_wav([(900, 220),(0,80),(900,220),(0,80),(900,220)]), "turno_cruzado")
+        self._tmp_error        = _guardar_temp(_generar_wav([(380, 600)]),                                "error")
+
+        print(f"[Audio] Archivos temp generados: {self._tmp_exito}")
+
+    # ─────────────────────── API pública ───────────────────────────────
+
+    def reproducir_registro_exitoso(self):
+        """1 pip corto agudo — confirmación de registro exitoso."""
+        self._play_path(self._tmp_exito)
+
     def reproducir_alerta_turno_cruzado(self):
-        """
-        3 beeps cortos: bip-bip-bip
-        Para turno cruzado (alerta amarilla)
-        """
-        # Intentar archivo WAV primero
-        if self.alerta_turno_file.exists():
-            self._reproducir_wav(self.alerta_turno_file)
-        else:
-            # Fallback: 3 beeps cortos del sistema
-            self._beeps_sistema(cantidad=3, duracion=150, frecuencia=1000, pausa=100)
-    
+        """3 beeps medianos — alerta de turno cruzado."""
+        path = str(self.alerta_turno_file) if self.alerta_turno_file.exists() else self._tmp_turno_cruzado
+        self._play_path(path)
+
     def reproducir_alerta_error(self):
+        """1 tono grave largo — error."""
+        path = str(self.alerta_error_file) if self.alerta_error_file.exists() else self._tmp_error
+        self._play_path(path)
+
+    # ─────────────────────── Internos ──────────────────────────────────
+
+    def _play_path(self, path: str):
         """
-        Beep largo: biiiip
-        Para errores (alerta roja)
-        """
-        # Intentar archivo WAV primero
-        if self.alerta_error_file.exists():
-            self._reproducir_wav(self.alerta_error_file)
-        else:
-            # Fallback: 1 beep largo del sistema
-            self._beeps_sistema(cantidad=1, duracion=800, frecuencia=800, pausa=0)
-    
-    def _reproducir_wav(self, archivo):
-        """Reproduce un archivo WAV"""
-        if AUDIO_ENGINE == "winsound":
-            try:
-                winsound.PlaySound(
-                    str(archivo), 
-                    winsound.SND_FILENAME | winsound.SND_ASYNC
-                )
-                return True
-            except Exception as e:
-                print(f"Error reproduciendo WAV con winsound: {e}")
-                return False
-        
-        elif AUDIO_ENGINE == "pygame":
-            try:
-                sound = mixer.Sound(str(archivo))
-                sound.play()
-                return True
-            except Exception as e:
-                print(f"Error reproduciendo WAV con pygame: {e}")
-                return False
-        
-        return False
-    
-    def _beeps_sistema(self, cantidad=1, duracion=200, frecuencia=1000, pausa=100):
-        """
-        Genera beeps usando el sistema
+        Reproduce un archivo WAV de forma asíncrona.
+        SND_FILENAME | SND_ASYNC es la combinación más estable en Windows.
         """
         if AUDIO_ENGINE == "winsound":
-            import time
-            for i in range(cantidad):
+            try:
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                print(f"[Audio] ✅ Reproduciendo: {os.path.basename(path)}")
+            except Exception as e:
+                print(f"[Audio] Error PlaySound: {e}")
                 try:
-                    winsound.Beep(frecuencia, duracion)
-                    if i < cantidad - 1:  # No pausar después del último
-                        time.sleep(pausa / 1000)
-                except Exception as e:
-                    print(f"Error con winsound.Beep: {e}")
-                    # Fallback final: usar MessageBeep
                     winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-        
+                except Exception:
+                    pass
+
         elif AUDIO_ENGINE == "pygame":
-            # Generar beep sintético con pygame
             try:
-                import numpy as np
-                sample_rate = 22050
-                
-                for i in range(cantidad):
-                    # Generar onda sinusoidal
-                    t = np.linspace(0, duracion/1000, int(sample_rate * duracion/1000))
-                    wave = np.sin(2 * np.pi * frecuencia * t)
-                    
-                    # Convertir a formato de audio
-                    wave = (wave * 32767).astype(np.int16)
-                    stereo_wave = np.column_stack((wave, wave))
-                    
-                    sound = mixer.Sound(stereo_wave)
-                    sound.play()
-                    
-                    if i < cantidad - 1:
-                        import time
-                        time.sleep((duracion + pausa) / 1000)
+                sound = mixer.Sound(path)
+                sound.play()
             except Exception as e:
-                print(f"Error generando beep con pygame: {e}")
-        
+                print(f"[Audio] Error pygame: {e}")
+
         else:
-            # Sin motor de audio, imprimir en consola
-            beep_text = "BIP " * cantidad
-            print(f"🔊 {beep_text.strip()}")
+            print("[Audio] 🔊 BIP (sin motor de audio)")
+

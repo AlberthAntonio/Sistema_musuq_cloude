@@ -562,6 +562,24 @@ class CajaView(ctk.CTkFrame):
 
     def _crear_item_resultado(self, alumno):
         """Crear item de resultado de búsqueda"""
+        nombre = (
+            alumno.get("nombre_completo")
+            or alumno.get("alumno_nombre")
+            or alumno.get("nombre")
+            or (
+                f"{alumno.get('apellidos', '')}, {alumno.get('nombres', '')}".strip().strip(",")
+            )
+            or (
+                f"{alumno.get('apell_paterno', '')} {alumno.get('apell_materno', '')}, {alumno.get('nombres', '')}".strip().strip(",")
+            )
+            or "Alumno sin nombre"
+        )
+        dni = alumno.get("dni", "-")
+        alumno_id = alumno.get("id") or alumno.get("alumno_id")
+
+        if not alumno_id:
+            return
+
         # Frame transparente contenedor
         item_frame = ctk.CTkFrame(self.scroll_resultados, fg_color="transparent")
         item_frame.pack(fill="x", pady=1)
@@ -569,7 +587,7 @@ class CajaView(ctk.CTkFrame):
         # Botón resultado
         btn = ctk.CTkButton(
             item_frame,
-            text=f"{alumno.apell_paterno} {alumno.nombres}\n📄 DNI: {alumno.dni}",
+            text=f"{nombre}\n📄 DNI: {dni}",
             fg_color="#2b2b2b",
             hover_color="#404040",
             border_width=0,
@@ -578,7 +596,7 @@ class CajaView(ctk.CTkFrame):
             text_color=TM.text(),
             font=CTkFont(family="Roboto", size=11),
             corner_radius=8,
-            command=lambda: self.seleccionar_alumno(alumno.id)
+            command=lambda a_id=alumno_id: self.seleccionar_alumno(a_id)
         )
         btn.pack(fill="x")
 
@@ -640,7 +658,7 @@ class CajaView(ctk.CTkFrame):
         # Fecha
         ctk.CTkLabel(
             row,
-            text=pago.fecha,
+            text=pago['fecha'],
             width=120,
             text_color=TM.text(),
             font=CTkFont(family="Roboto Mono", size=10)
@@ -649,7 +667,7 @@ class CajaView(ctk.CTkFrame):
         # Concepto
         ctk.CTkLabel(
             row,
-            text=pago.concepto,
+            text=pago['concepto'],
             text_color=TM.text_secondary(),
             font=CTkFont(family="Roboto", size=11),
             anchor="w"
@@ -658,7 +676,7 @@ class CajaView(ctk.CTkFrame):
         # Monto
         ctk.CTkLabel(
             row,
-            text=f"S/. {pago.monto:.2f}",
+            text=f"S/. {pago['monto']:.2f}",
             width=120,
             text_color=TM.success(),
             font=CTkFont(family="Roboto", size=11, weight="bold")

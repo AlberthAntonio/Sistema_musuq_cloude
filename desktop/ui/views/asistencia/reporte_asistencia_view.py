@@ -515,9 +515,9 @@ class ReporteAsistenciaView(ctk.CTkFrame):
 
         for alu in resultados:
             if alu.nombre_completo:
-                name_alumno = alu.nombre_completo.replace(",", "")
+                name_alumno = alu.nombre_completo.replace(",", "").upper()
             else:
-                name_alumno = f"{alu.apell_paterno} {alu.nombres}"
+                name_alumno = f"{alu.apell_paterno} {alu.nombres}".upper()
 
             btn = ctk.CTkButton(
                 self.lista_resultados,
@@ -582,13 +582,13 @@ class ReporteAsistenciaView(ctk.CTkFrame):
         # 1. Actualizar Perfil
         alu = datos["alumno"]
         self.lbl_nombre.configure(
-            text=f"{alu.nombres}\n{alu.apell_paterno} {alu.apell_materno}"
+            text=f"{alu.nombres.upper()}\n{alu.apell_paterno.upper()} {alu.apell_materno.upper()}"
         )
         self.lbl_codigo.configure(
-            text=f"DNI: {alu.dni} | COD: {alu.codigo_matricula}"
+            text=f"DNI: {alu.dni} | COD: {alu.codigo_matricula.upper()}"
         )
         self.lbl_grupo.configure(
-            text=f"Grupo: {alu.grupo or '-'} | Horario: {alu.horario or '-'}"
+            text=f"GRUPO: {(alu.grupo or '-').upper()} | HORARIO: {(alu.horario or '-').upper()}"
         )
 
         # 2. Actualizar KPIs
@@ -642,20 +642,22 @@ class ReporteAsistenciaView(ctk.CTkFrame):
         bg_row = "#2d2d2d" if index % 2 == 0 else "#363636"
 
         # Lógica de estados
+        # Backend devuelve: "Puntual", "Tarde", "Falta", "Justificado"
         estado = fila.get("estado", "")
         color_st = TM.text()
         icon = "❓"
+        estado_u = estado.upper()
 
-        if estado == "PUNTUAL":
+        if "PUNTUAL" in estado_u:
             color_st = st.Colors.PUNTUAL
             icon = "✅"
-        elif estado == "TARDANZA":
+        elif "TARD" in estado_u:  # "Tarde" o "TARDANZA"
             color_st = st.Colors.TARDANZA
             icon = "⏳"
-        elif estado in ["INASISTENCIA", "FALTA"]:
+        elif "INASISTENCIA" in estado_u or "FALTA" in estado_u:
             color_st = st.Colors.FALTA
             icon = "❌"
-        elif estado == "JUSTIFICADO":
+        elif "JUSTIF" in estado_u:
             color_st = st.Colors.ASISTENCIA
             icon = "📄"
 
@@ -682,10 +684,17 @@ class ReporteAsistenciaView(ctk.CTkFrame):
             width=self.ANCHOS_COLUMNAS[0]
         ).pack(side="left", padx=2)
 
-        # 2. Día
+        # 2. Día — calculado desde "fecha", el backend no lo envía como campo
+        fecha_str = fila.get("fecha", "")
+        dia_str = ""
+        try:
+            from datetime import datetime as _dt
+            dia_str = _dt.strptime(str(fecha_str), "%Y-%m-%d").strftime("%A").upper()[:3]
+        except Exception:
+            pass
         ctk.CTkLabel(
             row,
-            text=fila.get("dia", ""),
+            text=dia_str,
             text_color=TM.text_secondary(),
             font=font_cell,
             width=self.ANCHOS_COLUMNAS[1]
@@ -718,13 +727,13 @@ class ReporteAsistenciaView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             f_st,
-            text=estado,
+            text=estado_u,
             text_color=color_st,
             font=ctk.CTkFont(family="Roboto", size=10, weight="bold")
         ).pack(side="left")
 
         # 5. Turno
-        turno_txt = fila.get("turno") or "-"
+        turno_txt = (fila.get("turno") or "-").upper()
         ctk.CTkLabel(
             row,
             text=turno_txt,
@@ -734,8 +743,8 @@ class ReporteAsistenciaView(ctk.CTkFrame):
             width=self.ANCHOS_COLUMNAS[4]
         ).pack(side="left", padx=2)
 
-        # 6. Observación
-        obs_txt = fila.get("obs", "")
+        # 6. Observación — el backend devuelve la clave como "observacion"
+        obs_txt = (fila.get("observacion", "") or fila.get("obs", "")).upper()
         if len(obs_txt) > 35:
             obs_txt = obs_txt[:32] + "..."
 

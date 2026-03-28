@@ -54,20 +54,22 @@ class DialogoJustificacion(ctk.CTkToplevel):
         self.fr_info = ctk.CTkFrame(self, fg_color="#2b2b2b", corner_radius=10)
         self.fr_info.pack(fill="x", padx=25, pady=20)
         
-        bg_badge = st.Colors.FALTA if "FALTA" in estado or "INASISTENCIA" in estado else st.Colors.TARDANZA
+        # Backend devuelve "Falta", "Tarde", "Justificado" (no en mayúsculas)
+        estado_u = estado.upper()
+        bg_badge = st.Colors.FALTA if "FALTA" in estado_u or "INASISTENCIA" in estado_u else st.Colors.TARDANZA
         
         # Fila Fecha
         f1 = ctk.CTkFrame(self.fr_info, fg_color="transparent")
         f1.pack(fill="x", padx=15, pady=(15,5))
         ctk.CTkLabel(f1, text="FECHA DEL SUCESO:", font=("Roboto", 11, "bold"), text_color="gray").pack(side="left")
-        ctk.CTkLabel(f1, text=fecha, font=("Roboto", 12, "bold"), text_color="white").pack(side="right")
+        ctk.CTkLabel(f1, text=str(fecha).upper(), font=("Roboto", 12, "bold"), text_color="white").pack(side="right")
         
         # Fila Estado
         f2 = ctk.CTkFrame(self.fr_info, fg_color="transparent")
         f2.pack(fill="x", padx=15, pady=(5,15))
         ctk.CTkLabel(f2, text="ESTADO ACTUAL:", font=("Roboto", 11, "bold"), text_color="gray").pack(side="left")
         
-        lbl_st = ctk.CTkLabel(f2, text=estado, font=("Roboto", 12, "bold"), text_color="white", fg_color=bg_badge, corner_radius=5, padx=10)
+        lbl_st = ctk.CTkLabel(f2, text=estado.upper(), font=("Roboto", 12, "bold"), text_color="white", fg_color=bg_badge, corner_radius=5, padx=10)
         lbl_st.pack(side="right")
         
         # 3. Formulario

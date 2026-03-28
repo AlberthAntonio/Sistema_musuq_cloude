@@ -1,10 +1,9 @@
-"""
-Cliente HTTP para comunicación con el backend FastAPI
+"""Cliente HTTP para comunicación con el backend FastAPI
 Sistema Musuq Cloud
 """
 
 import httpx
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from .config import Config
 
 
@@ -15,6 +14,7 @@ class APIClient:
         self.base_url = Config.API_BASE_URL
         self.timeout = Config.API_TIMEOUT
         self.token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
         # Persistent client for connection pooling (reutiliza conexiones TCP)
         self._client = httpx.Client(timeout=self.timeout)
     
@@ -24,7 +24,7 @@ class APIClient:
             auth = AuthManager()
             if auth.load_session():
                 self.token = auth.token
-                # print(f"[DEBUG API] Token cargado automáticamente: {self.token[:10]}...") 
+                self.refresh_token = auth.refresh_token
         except Exception as e:
             print(f"[WARN] No se pudo cargar sesión automática: {e}")
 
@@ -44,8 +44,38 @@ class APIClient:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
     
+    def _do_refresh(self) -> bool:
+        """Renovar tokens usando refresh_token. Retorna True si lo logra."""
+        if not self.refresh_token:
+            return False
+        try:
+            response = self._client.post(
+                f"{self.base_url}/auth/refresh",
+                json={"refresh_token": self.refresh_token},
+                headers={"Content-Type": "application/json"}
+            )
+            if response.status_code == 200:
+                data = response.json()
+                self.token = data.get("access_token")
+                self.refresh_token = data.get("refresh_token", self.refresh_token)
+                # Persistir en session.json
+                try:
+                    from .auth_manager import AuthManager
+                    auth = AuthManager()
+                    auth.load_session()
+                    auth.save_session(
+                        self.token, auth.user_data or {},
+                        remember=True, refresh_token=self.refresh_token
+                    )
+                except Exception:
+                    pass
+                return True
+        except Exception as e:
+            print(f"[WARN] Auto-refresh falló: {e}")
+        return False
+
     def _request(self, method: str, endpoint: str, **kwargs) -> Tuple[bool, Dict[str, Any]]:
-        """Realizar petición HTTP"""
+        """Realizar petición HTTP con auto-refresh en 401"""
         url = f"{self.base_url}{endpoint}"
         headers = self._get_headers()
         
@@ -57,14 +87,28 @@ class APIClient:
                 **kwargs
             )
             
-            if response.status_code == 200 or response.status_code == 201:
+            if response.status_code in (200, 201):
                 return True, response.json()
             elif response.status_code == 204:
                 return True, {}
             elif response.status_code == 401:
+                # Intentar renovar tokens una sola vez
+                if self.refresh_token and self._do_refresh():
+                    headers2 = self._get_headers()
+                    response2 = self._client.request(
+                        method=method, url=url, headers=headers2, **kwargs
+                    )
+                    if response2.status_code in (200, 201):
+                        return True, response2.json()
+                    elif response2.status_code == 204:
+                        return True, {}
                 return False, {"error": "No autorizado. Token inválido o expirado."}
             elif response.status_code == 422:
-                return False, {"error": "Datos inválidos", "detail": response.json()}
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = {}
+                return False, {"error": "Datos inválidos", "detail": detail}
             else:
                 try:
                     error_data = response.json()
@@ -115,6 +159,7 @@ class AuthClient(APIClient):
             if response.status_code == 200:
                 data = response.json()
                 self.token = data.get("access_token")
+                self.refresh_token = data.get("refresh_token")
                 
                 # Obtener datos del usuario
                 user_success, user_data = self.get_current_user()
@@ -149,9 +194,11 @@ class AuthClient(APIClient):
 class AlumnoClient(APIClient):
     """Cliente para gestión de alumnos"""
     
-    def obtener_todos(self, skip: int = 0, limit: int = 100) -> Tuple[bool, Dict]:
-        """Obtener lista de alumnos"""
-        return self.get("/alumnos/", params={"skip": skip, "limit": limit})
+    def obtener_todos(self, skip: int = 0, limit: int = 100, **kwargs) -> Tuple[bool, Dict]:
+        """Obtener lista de alumnos con filtros opcionales"""
+        params = {"skip": skip, "limit": limit}
+        params.update(kwargs)  # Añade grupo u otros filtros
+        return self.get("/alumnos/", params=params)
     
     def obtener_por_id(self, alumno_id: int) -> Tuple[bool, Dict]:
         """Obtener alumno por ID"""
@@ -269,13 +316,17 @@ class AsistenciaClient(APIClient):
         if limit is not None: params["limit"] = limit
         return self.get("/asistencia/", params=params)
     
+    def actualizar(self, asistencia_id: int, data: Dict) -> Tuple[bool, Dict]:
+        """Actualizar un registro de asistencia (estado, observacion, etc.)"""
+        return self.put(f"/asistencia/{asistencia_id}", data=data)
+
     def eliminar(self, asistencia_id: int) -> Tuple[bool, Dict]:
         """Eliminar un registro de asistencia"""
         return self.delete(f"/asistencia/{asistencia_id}")
 
     def justificar(self, asistencia_id: int, motivo: str) -> Tuple[bool, Dict]:
         """Justificar una asistencia (usa PUT genérico)"""
-        return self.put(f"/asistencia/{asistencia_id}", data={"estado": "JUSTIFICADO", "observacion": motivo})
+        return self.actualizar(asistencia_id, {"estado": "JUSTIFICADO", "observacion": motivo})
 
 
 class UsuariosClient(APIClient):
@@ -332,6 +383,10 @@ class CursosClient(APIClient):
     def obtener_malla_por_grupo(self, grupo: str) -> Tuple[bool, Dict]:
         """Obtener cursos asignados a un grupo desde la malla curricular"""
         return self.get(f"/cursos/por-grupo/{grupo}")
+
+    def obtener_asignaciones_malla(self, grupo: str) -> Tuple[bool, Dict]:
+        """Obtener asignaciones de malla por grupo (incluye id de malla)."""
+        return self.get("/cursos/malla/", params={"grupo": grupo})
     
     def crear_asignacion_malla(self, grupo: str, curso_id: int) -> Tuple[bool, Dict]:
         """Asignar un curso a un grupo en la malla curricular"""
@@ -373,6 +428,19 @@ class DocentesClient(APIClient):
         """Buscar docentes por nombre o DNI"""
         return self.get("/docentes/buscar", params={"q": query})
 
+    def obtener_por_curso(self, curso_id: int) -> Tuple[bool, Dict]:
+        """Obtener docentes que dictan un curso específico."""
+        return self.get(f"/docentes/por-curso/{curso_id}")
+
+    def obtener_cursos_docente(self, docente_id: int) -> Tuple[bool, Dict]:
+        """Obtener cursos asignados a un docente."""
+        return self.get(f"/docentes/{docente_id}/cursos")
+
+    def asignar_cursos(self, docente_id: int, curso_ids: List[int]) -> Tuple[bool, Dict]:
+        """Asignar (reemplazar) los cursos de un docente."""
+        data = {"curso_ids": curso_ids}
+        return self.post(f"/docentes/{docente_id}/cursos", data=data)
+
 
 class HorariosClient(APIClient):
     """Cliente para gestión de horarios"""
@@ -399,7 +467,14 @@ class HorariosClient(APIClient):
     
     def obtener_por_grupo(self, grupo: str) -> Tuple[bool, Dict]:
         """Obtener horarios de un grupo"""
-        return self.get("/horarios/", params={"grupo": grupo})
+        return self.get("/horarios/por-grupo/{}".format(grupo))
+
+    def obtener_por_aula(self, aula_id: int, periodo: Optional[str] = None) -> Tuple[bool, Dict]:
+        """GET /aulas/{id}/horarios — horarios de un aula específica"""
+        params: Dict[str, Any] = {}
+        if periodo:
+            params["periodo"] = periodo
+        return self.get(f"/aulas/{aula_id}/horarios", params=params)
 
 
 class EventosClient(APIClient):
@@ -544,3 +619,227 @@ class SesionesClient(APIClient):
     def eliminar(self, sesion_id: int) -> Tuple[bool, Dict]:
         """Eliminar sesión"""
         return self.delete(f"/sesiones/{sesion_id}")
+
+
+class AulasClient(APIClient):
+    """Cliente para gestión de aulas"""
+
+    def listar(self, modalidad: Optional[str] = None, activo: Optional[bool] = True) -> Tuple[bool, Dict]:
+        """GET /aulas/ — lista de aulas con filtros opcionales"""
+        params: Dict[str, Any] = {}
+        if modalidad:
+            params["modalidad"] = modalidad
+        if activo is not None:
+            params["activo"] = activo
+        return self.get("/aulas/", params=params)
+
+    def obtener_por_id(self, aula_id: int) -> Tuple[bool, Dict]:
+        """GET /aulas/{id}"""
+        return self.get(f"/aulas/{aula_id}")
+
+    def crear(self, data: Dict) -> Tuple[bool, Dict]:
+        """POST /aulas/ — crea aula (solo admin)"""
+        return self.post("/aulas/", data=data)
+
+    def actualizar(self, aula_id: int, data: Dict) -> Tuple[bool, Dict]:
+        """PUT /aulas/{id} — actualiza aula (solo admin)"""
+        return self.put(f"/aulas/{aula_id}", data=data)
+
+    def eliminar(self, aula_id: int) -> Tuple[bool, Dict]:
+        """DELETE /aulas/{id} — elimina aula (solo admin)"""
+        return self.delete(f"/aulas/{aula_id}")
+
+    def obtener_horarios(self, aula_id: int, periodo: Optional[str] = None) -> Tuple[bool, Dict]:
+        """GET /aulas/{id}/horarios"""
+        params: Dict[str, Any] = {}
+        if periodo:
+            params["periodo"] = periodo
+        return self.get(f"/aulas/{aula_id}/horarios", params=params)
+
+
+class MatriculasClient(APIClient):
+    """Cliente para gestión de matrículas (POST-refactorización)"""
+
+    def listar(
+        self,
+        periodo_id: Optional[int] = None,
+        alumno_id: Optional[int] = None,
+        grupo: Optional[str] = None,
+        estado: Optional[str] = "activo",
+        skip: int = 0,
+        limit: int = 100,
+    ) -> Tuple[bool, Dict]:
+        """GET /matriculas/ con filtros opcionales"""
+        params: Dict[str, Any] = {"skip": skip, "limit": limit}
+        if periodo_id is not None:
+            params["periodo_id"] = periodo_id
+        if alumno_id is not None:
+            params["alumno_id"] = alumno_id
+        if grupo:
+            params["grupo"] = grupo
+        if estado:
+            params["estado"] = estado
+        return self.get("/matriculas/", params=params)
+
+    def obtener_activa_por_alumno(self, alumno_id: int, periodo_id: Optional[int] = None) -> Tuple[bool, Optional[Dict]]:
+        """Retorna la matrícula activa de un alumno (primero de la lista o None)"""
+        params: Dict[str, Any] = {"alumno_id": alumno_id, "estado": "activo", "limit": 1}
+        if periodo_id:
+            params["periodo_id"] = periodo_id
+        success, result = self.get("/matriculas/", params=params)
+        if success:
+            items = result if isinstance(result, list) else []
+            return (True, items[0]) if items else (False, None)
+        return False, None
+
+    def obtener_por_id(self, matricula_id: int) -> Tuple[bool, Dict]:
+        return self.get(f"/matriculas/{matricula_id}")
+
+    def obtener_por_codigo(self, codigo: str) -> Tuple[bool, Dict]:
+        return self.get(f"/matriculas/codigo/{codigo}")
+
+    def crear(self, data: Dict) -> Tuple[bool, Dict]:
+        """POST /matriculas/"""
+        return self.post("/matriculas/", data=data)
+
+    def actualizar(self, matricula_id: int, data: Dict) -> Tuple[bool, Dict]:
+        return self.put(f"/matriculas/{matricula_id}", data=data)
+
+    def retirar(self, matricula_id: int) -> Tuple[bool, Dict]:
+        return self.post(f"/matriculas/{matricula_id}/retirar", data={})
+
+    def eliminar(self, matricula_id: int) -> Tuple[bool, Dict]:
+        return self.delete(f"/matriculas/{matricula_id}")
+
+
+class PeriodosClient(APIClient):
+    """Cliente para gestión de periodos académicos"""
+
+    def listar(self) -> Tuple[bool, Dict]:
+        """GET /periodos/"""
+        return self.get("/periodos/")
+
+    def obtener_activo(self) -> Tuple[bool, Dict]:
+        """GET /periodos/activo — retorna el periodo activo actual"""
+        return self.get("/periodos/activo")
+
+    def obtener_por_id(self, periodo_id: int) -> Tuple[bool, Dict]:
+        return self.get(f"/periodos/{periodo_id}")
+
+    def crear(self, data: Dict) -> Tuple[bool, Dict]:
+        return self.post("/periodos/", data=data)
+
+    def actualizar(self, periodo_id: int, data: Dict) -> Tuple[bool, Dict]:
+        return self.put(f"/periodos/{periodo_id}", data=data)
+
+    def cerrar(self, periodo_id: int) -> Tuple[bool, Dict]:
+        return self.post(f"/periodos/{periodo_id}/cerrar", data={})
+
+
+class ObligacionesClient(APIClient):
+    """Cliente para gestión de obligaciones de pago (POST-refactorización)"""
+
+    def listar(
+        self,
+        matricula_id: Optional[int] = None,
+        periodo_id: Optional[int] = None,
+        estado: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> Tuple[bool, Dict]:
+        """GET /obligaciones/"""
+        params: Dict[str, Any] = {"skip": skip, "limit": limit}
+        if matricula_id is not None:
+            params["matricula_id"] = matricula_id
+        if periodo_id is not None:
+            params["periodo_id"] = periodo_id
+        if estado:
+            params["estado"] = estado
+        return self.get("/obligaciones/", params=params)
+
+    def obtener_por_id(self, obligacion_id: int) -> Tuple[bool, Dict]:
+        return self.get(f"/obligaciones/{obligacion_id}")
+
+    def crear(self, data: Dict) -> Tuple[bool, Dict]:
+        """POST /obligaciones/"""
+        return self.post("/obligaciones/", data=data)
+
+    def actualizar(self, obligacion_id: int, data: Dict) -> Tuple[bool, Dict]:
+        return self.put(f"/obligaciones/{obligacion_id}", data=data)
+
+    def eliminar(self, obligacion_id: int) -> Tuple[bool, Dict]:
+        return self.delete(f"/obligaciones/{obligacion_id}")
+
+
+class ReportesClient(APIClient):
+    """
+    Cliente para endpoints de reportes consolidados.
+    Reemplaza patrones N×requests con consultas SQL únicas en el backend.
+    """
+
+    def deudores(
+        self,
+        periodo_id: Optional[int] = None,
+        grupo: Optional[str] = None,
+        modalidad: Optional[str] = None,
+    ) -> Tuple[bool, Dict]:
+        """
+        GET /reportes/deudores — lista alumnos con saldo pendiente.
+        Reemplaza el loop alumno-por-alumno en PagosController.
+        """
+        params: Dict[str, Any] = {}
+        if periodo_id is not None:
+            params["periodo_id"] = periodo_id
+        if grupo and grupo not in ("Todos", "Todas"):
+            params["grupo"] = grupo
+        if modalidad and modalidad not in ("Todos", "Todas"):
+            params["modalidad"] = modalidad
+        return self.get("/reportes/deudores", params=params)
+
+    def tardanzas(
+        self,
+        fecha_inicio: Optional[str] = None,
+        fecha_fin: Optional[str] = None,
+        grupo: Optional[str] = None,
+        turno: Optional[str] = None,
+        periodo_id: Optional[int] = None,
+    ) -> Tuple[bool, Dict]:
+        """
+        GET /reportes/tardanzas — lista registros de estado Tarde en el rango.
+        Reemplaza la paginación manual de 500-en-500 en ReporteTardanzaController.
+        """
+        params: Dict[str, Any] = {}
+        if fecha_inicio:
+            params["fecha_inicio"] = fecha_inicio
+        if fecha_fin:
+            params["fecha_fin"] = fecha_fin
+        if grupo and grupo not in ("Todos",):
+            params["grupo"] = grupo
+        if turno and turno not in ("Todos",):
+            params["turno"] = turno
+        if periodo_id is not None:
+            params["periodo_id"] = periodo_id
+        return self.get("/reportes/tardanzas", params=params)
+
+    def asistencia_resumen(
+        self,
+        periodo_id: Optional[int] = None,
+        grupo: Optional[str] = None,
+        fecha_inicio: Optional[str] = None,
+        fecha_fin: Optional[str] = None,
+    ) -> Tuple[bool, Dict]:
+        """GET /reportes/asistencia — resumen por alumno con GROUP BY."""
+        params: Dict[str, Any] = {}
+        if periodo_id is not None:
+            params["periodo_id"] = periodo_id
+        if grupo and grupo not in ("Todos",):
+            params["grupo"] = grupo
+        if fecha_inicio:
+            params["fecha_inicio"] = fecha_inicio
+        if fecha_fin:
+            params["fecha_fin"] = fecha_fin
+        return self.get("/reportes/asistencia", params=params)
+
+    def estadisticas_periodo(self, periodo_id: int) -> Tuple[bool, Dict]:
+        """GET /reportes/estadisticas/{periodo_id} — resumen completo del periodo."""
+        return self.get(f"/reportes/estadisticas/{periodo_id}")

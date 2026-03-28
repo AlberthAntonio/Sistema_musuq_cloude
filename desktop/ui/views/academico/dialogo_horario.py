@@ -45,8 +45,8 @@ class DialogoHorario(ctk.CTkToplevel):
 
     def crear_ui(self):
         """Crear interfaz del diálogo"""
-        # Frame principal
-        fr_main = ctk.CTkFrame(
+        # Frame principal scrollable (para que siempre se pueda acceder a los botones)
+        fr_main = ctk.CTkScrollableFrame(
             self,
             fg_color=TM.bg_panel(),
             corner_radius=0
@@ -131,7 +131,8 @@ class DialogoHorario(ctk.CTkToplevel):
             button_color=TM.primary(),
             button_hover_color="#2980b9",
             dropdown_fg_color=TM.bg_card(),
-            font=CTkFont(family="Roboto", size=11)
+            font=CTkFont(family="Roboto", size=11),
+            command=self._on_curso_change,
         )
         self.cb_curso.pack(pady=(0, 20))
         self.cb_curso.set("Seleccione un curso")
@@ -145,10 +146,10 @@ class DialogoHorario(ctk.CTkToplevel):
             anchor="w"
         ).pack(fill="x", pady=(0, 8))
 
-        docentes = ['Sin asignar'] + self.docentes_ctrl.obtener_nombres_para_combobox()
+        # Inicialmente solo "Sin asignar"; al elegir curso se filtrarán docentes
         self.cb_docente = ctk.CTkComboBox(
             form,
-            values=docentes,
+            values=["Sin asignar"],
             width=430,
             height=40,
             fg_color=TM.bg_card(),
@@ -222,6 +223,28 @@ class DialogoHorario(ctk.CTkToplevel):
             font=CTkFont(family="Roboto", size=12, weight="bold"),
             command=self.guardar
         ).pack(side="left", padx=8)
+
+    def _on_curso_change(self, curso_nombre: str):
+        """Actualizar la lista de docentes según el curso seleccionado."""
+        if not curso_nombre or curso_nombre == "Seleccione un curso":
+            # Volver a estado base
+            self.cb_docente.configure(values=["Sin asignar"])
+            self.cb_docente.set("Sin asignar")
+            return
+
+        curso = self.cursos_ctrl.buscar_por_nombre(curso_nombre)
+        if not curso:
+            self.cb_docente.configure(values=["Sin asignar"])
+            self.cb_docente.set("Sin asignar")
+            return
+
+        nombres_docentes = self.docentes_ctrl.obtener_docentes_por_curso(curso.get("id"))
+        valores = ["Sin asignar"] + nombres_docentes
+        self.cb_docente.configure(values=valores)
+        # Mantener selección si sigue siendo válida; si no, resetear
+        actual = self.cb_docente.get()
+        if actual not in valores:
+            self.cb_docente.set("Sin asignar")
 
     def guardar(self):
         """Guardar el bloque horario"""

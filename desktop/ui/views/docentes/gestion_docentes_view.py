@@ -12,6 +12,7 @@ from typing import Dict, Any
 from controllers.docentes_controller import DocentesController
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
+#from ui.views.docentes.resumen_docentes_view import ResumenDocenteView
 
 
 class GestionDocentesView(ctk.CTkFrame):
@@ -23,6 +24,7 @@ class GestionDocentesView(ctk.CTkFrame):
 
         # Variables de estado
         self.docente_seleccionado_id = None
+        self.docente_seleccionado_data = None
 
         # Layout principal (formulario + tabla)
         self.grid_columnconfigure(0, weight=1)  # Formulario
@@ -186,6 +188,19 @@ class GestionDocentesView(ctk.CTkFrame):
             font=ctk.CTkFont(family="Roboto", size=18, weight="bold"),
             text_color=TM.text()
         ).pack(side="left")
+
+        # Botón para ver resumen del docente seleccionado
+        ctk.CTkButton(
+            header_content,
+            text="👁 Ver resumen",
+            fg_color=TM.primary(),
+            hover_color="#2980b9",
+            width=140,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family="Roboto", size=12, weight="bold"),
+            command=self.ver_resumen_docente
+        ).pack(side="right")
 
         # --- BUSCADOR MEJORADO ---
         fr_search = ctk.CTkFrame(
@@ -576,11 +591,33 @@ class GestionDocentesView(ctk.CTkFrame):
             widget.bind("<Button-1>", on_click)
 
     def seleccionar_fila(self, row, data):
-        """Seleccionar fila y cargar datos en formulario"""
-        messagebox.showinfo(
-            "Docente Seleccionado",
-            f"Seleccionado: {data['nombre']}\n\n(Función de edición en desarrollo)"
-        )
+        """Seleccionar fila de la tabla y recordar el docente activo."""
+        self.docente_seleccionado_id = data.get("id")
+        self.docente_seleccionado_data = data
+
+    def ver_resumen_docente(self):
+        """Abrir la ventana de resumen para el docente seleccionado."""
+        if not self.docente_seleccionado_data:
+            messagebox.showwarning(
+                "Resumen de docente",
+                "Primero seleccione un docente de la tabla."
+            )
+            return
+
+        d = self.docente_seleccionado_data
+
+        info = {
+            "nombre_completo": d.get("nombre_completo") or d.get("nombre"),
+            "dni": d.get("dni"),
+            "especialidad": d.get("especialidad"),
+            # Estos campos se llenarán cuando la API los proporcione
+            "turno": None,
+            "tipo_contrato": None,
+            "celular": d.get("celular"),
+            "email": d.get("email"),
+        }
+
+        ResumenDocenteView(self, docente=info)
 
     # =================== MÉTODOS DE LÓGICA ===================
 

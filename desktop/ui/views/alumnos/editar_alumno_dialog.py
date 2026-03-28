@@ -111,7 +111,16 @@ class EditarAlumnoDialog(ctk.CTkToplevel):
         self.crear_combo(row3, "grupo", "Grupo", ["A", "B", "C", "D"], 80)
         self.crear_combo(row3, "horario", "Horario", ["MATUTINO", "VESPERTINO", "DOBLE HORARIO"], 130)
         self.crear_combo(row3, "modalidad", "Modalidad", 
-                        ["PRIMERA OPCION", "ORDINARIO", "COLEGIO", "REFORZAMIENTO"], 150)
+                        ["PRIMERA OPCION", "ORDINARIO", "COLEGIO", "REFORZAMIENTO"], 150,
+                        on_change=self.on_modalidad_change)
+
+        # Fila 3b: Nivel y Grado (solo COLEGIO)
+        self.row_colegio = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.row_colegio.pack(fill="x", pady=5)
+        self.crear_combo(self.row_colegio, "nivel", "Nivel", ["PRIMARIA", "SECUNDARIA"], 120,
+                         on_change=self.on_nivel_change)
+        self.crear_combo(self.row_colegio, "grado", "Grado", [], 100)
+        self.row_colegio.pack_forget()  # Oculto por defecto
         
         # Fila 4: Carrera
         row4 = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -193,7 +202,7 @@ class EditarAlumnoDialog(ctk.CTkToplevel):
         
         self.entries[key] = entry
     
-    def crear_combo(self, parent, key: str, label: str, valores: list, width: int):
+    def crear_combo(self, parent, key: str, label: str, valores: list, width: int, on_change=None):
         """Crear combobox"""
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(side="left", padx=(0, 10))
@@ -209,11 +218,35 @@ class EditarAlumnoDialog(ctk.CTkToplevel):
             frame,
             values=valores,
             width=width,
-            height=30
+            height=30,
+            command=on_change if on_change else None
         )
         combo.pack()
         
         self.combos[key] = combo
+
+    def on_modalidad_change(self, seleccion=None):
+        """Mostrar u ocultar fila nivel/grado según modalidad"""
+        modalidad = self.combos["modalidad"].get()
+        if modalidad == "COLEGIO":
+            self.row_colegio.pack(fill="x", pady=5)
+        else:
+            self.row_colegio.pack_forget()
+            self.combos["nivel"].set("")
+            self.combos["grado"].configure(values=[])
+            self.combos["grado"].set("")
+
+    def on_nivel_change(self, seleccion=None):
+        """Actualizar opciones de grado según nivel"""
+        nivel = self.combos["nivel"].get()
+        if nivel == "PRIMARIA":
+            grados = ["1°", "2°", "3°", "4°", "5°", "6°"]
+        elif nivel == "SECUNDARIA":
+            grados = ["1°", "2°", "3°", "4°", "5°"]
+        else:
+            grados = []
+        self.combos["grado"].configure(values=grados)
+        self.combos["grado"].set(grados[0] if grados else "")
     
     def cargar_datos(self):
         """Cargar datos del alumno en los campos"""
@@ -230,6 +263,18 @@ class EditarAlumnoDialog(ctk.CTkToplevel):
             
             if valor:
                 combo.set(str(valor))
+
+        # Si la modalidad es COLEGIO, mostrar la fila y cargar nivel/grado
+        if self.alumno_data.get("modalidad") == "COLEGIO":
+            self.row_colegio.pack(fill="x", pady=5)
+            nivel = self.alumno_data.get("nivel", "")
+            if nivel == "PRIMARIA":
+                self.combos["grado"].configure(values=["1°", "2°", "3°", "4°", "5°", "6°"])
+            elif nivel == "SECUNDARIA":
+                self.combos["grado"].configure(values=["1°", "2°", "3°", "4°", "5°"])
+            grado = self.alumno_data.get("grado", "")
+            if grado:
+                self.combos["grado"].set(grado)
     
     def obtener_datos(self) -> Dict:
         """Obtener datos del formulario"""

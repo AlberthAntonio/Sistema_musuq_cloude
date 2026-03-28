@@ -11,9 +11,11 @@ class AsistenciaBase(BaseModel):
     """Esquema base de asistencia."""
     alumno_id: int
     fecha: date
-    turno: str  # "Mañana", "Tarde"
-    estado: str = "Puntual"  # Puntual, Tarde, Falta
+    turno: str  # "MAÑANA", "TARDE"
+    estado: str = "PUNTUAL"  # PUNTUAL, TARDANZA, INASISTENCIA
     observacion: Optional[str] = None
+    # Multi-tenant: si se omite se usa el periodo activo
+    periodo_id: Optional[int] = None
 
 
 class AsistenciaCreate(AsistenciaBase):
@@ -38,6 +40,7 @@ class AsistenciaResponse(AsistenciaBase):
     hora: Optional[time] = None
     alerta_turno: bool = False
     registrado_por: Optional[int] = None
+    periodo_id: Optional[int] = None
     fecha_registro: Optional[datetime] = None
     
     class Config:
@@ -48,7 +51,7 @@ class AsistenciaMasiva(BaseModel):
     """Esquema para registro masivo de asistencia."""
     fecha: date
     turno: str
-    registros: list[dict]  # [{"alumno_id": 1, "estado": "Puntual"}, ...]
+    registros: list[dict]  # [{"alumno_id": 1, "estado": "PUNTUAL"}, ...]
 
 
 class AsistenciaReporte(BaseModel):
@@ -57,6 +60,6 @@ class AsistenciaReporte(BaseModel):
     codigo_matricula: str
     nombre_completo: str
     total_puntual: int = 0
-    total_tarde: int = 0
+    total_tardanza: int = 0
     total_falta: int = 0
     porcentaje_asistencia: float = 0.0

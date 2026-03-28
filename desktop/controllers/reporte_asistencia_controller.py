@@ -1,23 +1,39 @@
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 from datetime import datetime
-from core.api_client import AlumnoClient, AsistenciaClient
+from core.api_client import AlumnoClient, AsistenciaClient, MatriculasClient
+
+# Estados normalizados según backend refactorizado
+_ESTADO_PUNTUAL   = "PUNTUAL"
+_ESTADO_TARDANZA  = "TARDANZA"
+_ESTADO_FALTA     = "INASISTENCIA"  # El backend usa "Inasistencia" para faltas no justificadas
 
 class AlumnoDTO:
-    """DTO para que la vista pueda acceder con notación de punto"""
-    def __init__(self, data: Dict):
-        self.id = data.get("id")
-        
-        self.nombre_completo = data.get("nombre_completo", "")
-        
-        self.nombres = data.get("nombres", "")
-        self.apell_paterno = data.get("apell_paterno", "")
-        self.apell_materno = data.get("apell_materno", "")
+    """DTO para que la vista pueda acceder con notación de punto.
+    Acepta datos de alumno y, opcionalmente, de matrícula activa."""
 
-        self.dni = data.get("dni", "")
-        self.codigo_matricula = data.get("codigo_matricula", "")
-        self.grupo = data.get("grupo", "")
-        self.horario = data.get("horario", "")
-        self.activo = data.get("activo", True)
+    def __init__(self, alumno_data: Dict, matricula_data: Optional[Dict] = None):
+        mat = matricula_data or {}
+
+        self.id              = alumno_data.get("id")
+        self.dni             = alumno_data.get("dni", "")
+        self.nombres         = alumno_data.get("nombres", "").upper()
+        self.apell_paterno   = alumno_data.get("apell_paterno", "").upper()
+        self.apell_materno   = alumno_data.get("apell_materno", "").upper()
+        self.activo          = alumno_data.get("activo", True)
+
+        # Campos que migraron a Matricula
+        self.codigo_matricula = mat.get("codigo_matricula", "").upper()
+        self.grupo            = mat.get("grupo", "").upper()
+        self.horario          = mat.get("horario", "").upper()
+        self.carrera          = mat.get("carrera", "").upper()
+        self.modalidad        = mat.get("modalidad", "").upper()
+
+        # Nombre completo calculado
+        raw_nombre = alumno_data.get(
+            "nombre_completo",
+            f"{self.apell_paterno} {self.apell_materno}, {self.nombres}".strip(", ")
+        )
+        self.nombre_completo = raw_nombre.upper()
 
 class ReporteAsistenciaController:
     """
@@ -25,9 +41,14 @@ class ReporteAsistenciaController:
     Conecta con el backend via APIClient.
     """
     
-    def __init__(self):
-        self.alumno_client = AlumnoClient()
+    def __init__(self, auth_token: str = ""):
+        self.alumno_client     = AlumnoClient()
         self.asistencia_client = AsistenciaClient()
+        self.matricula_client  = MatriculasClient()
+        if auth_token:
+            self.alumno_client.token     = auth_token
+            self.asistencia_client.token = auth_token
+            self.matricula_client.token  = auth_token
 
     def buscar_alumnos(self, texto: str) -> List[AlumnoDTO]:
         """Busca alumnos y retorna objetos DTO"""
@@ -54,8 +75,14 @@ class ReporteAsistenciaController:
         success_a, data_alumno = self.alumno_client.obtener_por_id(id_alumno)
         if not success_a:
             return False, "Error al obtener datos del alumno", {}
-            
-        alumno_dto = AlumnoDTO(data_alumno)
+
+        # 1b. Obtener matrícula activa para completar datos académicos
+        matricula_data: Dict = {}
+        ok_m, mat = self.matricula_client.obtener_activa_por_alumno(id_alumno)
+        if ok_m and isinstance(mat, dict):
+            matricula_data = mat
+
+        alumno_dto = AlumnoDTO(data_alumno, matricula_data)
 
         # 2. Obtener Historial (Usando filtros de fecha)
         # Convertir fechas de dd/mm/yyyy a yyyy-mm-dd para la API si es necesario
@@ -75,14 +102,21 @@ class ReporteAsistenciaController:
         historial = []
         if success_h:
             historial = result_hist if isinstance(result_hist, list) else result_hist.get("items", [])
-        
+
+        # Normalizar campos a mayúsculas al salir del controlador
+        for item in historial:
+            if item.get("turno"):
+                item["turno"] = item["turno"].upper()
+            if item.get("estado"):
+                item["estado"] = item["estado"].upper()
+
         # Ordenar historial por fecha y hora descendente (más reciente primero)
         historial.sort(key=lambda x: (x.get("fecha") or "", x.get("hora") or ""), reverse=True)
 
-        # 3. Calcular Stats
-        cont_p = sum(1 for h in historial if h.get("estado") == "PUNTUAL")
-        cont_t = sum(1 for h in historial if h.get("estado") == "TARDANZA")
-        cont_f = sum(1 for h in historial if h.get("estado") in ["FALTA", "INASISTENCIA"])
+        # 3. Calcular Stats (comparar con constantes ya en mayúsculas)
+        cont_p = sum(1 for h in historial if h.get("estado") == _ESTADO_PUNTUAL)
+        cont_t = sum(1 for h in historial if h.get("estado") == _ESTADO_TARDANZA)
+        cont_f = sum(1 for h in historial if h.get("estado") == _ESTADO_FALTA)
         total = len(historial)
         
         # Efectividad: (Puntuales + Tardanzas) / Total * 100 

@@ -18,13 +18,15 @@ class Asistencia(Base):
     # Relaciones
     alumno_id = Column(Integer, ForeignKey("alumnos.id"), nullable=False, index=True)
     registrado_por = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
+    # Multi-tenant: periodo al que pertenece el registro
+    periodo_id = Column(Integer, ForeignKey("periodos_academicos.id"), nullable=True, index=True)
     
     # Datos de asistencia
     fecha = Column(Date, nullable=False, index=True)
     hora = Column(Time, nullable=True)
     
-    # Estado del registro: PUNTUAL, TARDANZA, FALTA
-    estado = Column(String(20), nullable=False, default="Puntual")
+    # Estado del registro: PUNTUAL, TARDANZA, INASISTENCIA
+    estado = Column(String(20), nullable=False, default="PUNTUAL")
     
     # Turno en que ocurrió la asistencia: MAÑANA o TARDE
     # (Distinto de Alumno.horario que es MATUTINO/VESPERTINO/DOBLE HORARIO)

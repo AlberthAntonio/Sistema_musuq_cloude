@@ -103,8 +103,46 @@ class StudentPreviewCard(ctk.CTkFrame):
 
         ctk.CTkFrame(meta_frame, height=5, fg_color="transparent").pack()
 
-        # Badge Modalidad
-        self._crear_badge(meta_frame, "📋", "lbl_modalidad_preview", "-", TM.text_secondary())
+        # Fila Modalidad + Nivel (nivel oculto por defecto)
+        row_modalidad = ctk.CTkFrame(meta_frame, fg_color="transparent")
+        row_modalidad.pack(fill="x", anchor="w", pady=1)
+
+        ctk.CTkLabel(row_modalidad, text="📋", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 5))
+        self.lbl_modalidad_preview = ctk.CTkLabel(
+            row_modalidad,
+            text="-",
+            font=ctk.CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary(),
+            anchor="w"
+        )
+        self.lbl_modalidad_preview.pack(side="left")
+
+        # Nivel al costado de modalidad
+        self.fr_nivel_badge = ctk.CTkFrame(row_modalidad, fg_color="transparent")
+        # No se hace pack todavía (oculto por defecto)
+        ctk.CTkLabel(self.fr_nivel_badge, text="  |", font=ctk.CTkFont(size=11),
+                     text_color="#505050").pack(side="left")
+        ctk.CTkLabel(self.fr_nivel_badge, text="🏫", font=ctk.CTkFont(size=12)).pack(side="left", padx=(4, 4))
+        self.lbl_nivel_preview = ctk.CTkLabel(
+            self.fr_nivel_badge,
+            text="-",
+            font=ctk.CTkFont(family="Roboto", size=11, weight="bold"),
+            text_color="#3498db",
+            anchor="w"
+        )
+        self.lbl_nivel_preview.pack(side="left")
+
+        # Grado al costado del nivel
+        ctk.CTkLabel(self.fr_nivel_badge, text=" ·", font=ctk.CTkFont(size=11),
+                     text_color="#505050").pack(side="left")
+        self.lbl_grado_preview = ctk.CTkLabel(
+            self.fr_nivel_badge,
+            text="",
+            font=ctk.CTkFont(family="Roboto", size=11, weight="bold"),
+            text_color="#2ecc71",
+            anchor="w"
+        )
+        self.lbl_grado_preview.pack(side="left", padx=(3, 0))
 
     def _crear_badge(self, parent, icon, attr_name, default_text, color):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -122,8 +160,8 @@ class StudentPreviewCard(ctk.CTkFrame):
         lbl.pack(side="left")
         setattr(self, attr_name, lbl)
 
-    def update_data(self, nombre_completo: str, dni: str, carrera: str, grupo: str, modalidad: str):
-        """Actualizar datos del carnet"""
+    def update_data(self, nombre_completo: str, dni: str, carrera: str, grupo: str, modalidad: str, nivel: str = None, grado: str = None):
+        """Actualizar datos del carnet"""""
         if nombre_completo:
             self.lbl_preview_nombre.configure(text=nombre_completo.upper())
         else:
@@ -148,6 +186,15 @@ class StudentPreviewCard(ctk.CTkFrame):
             self.lbl_modalidad_preview.configure(text=modalidad)
         else:
             self.lbl_modalidad_preview.configure(text="-")
+
+        # Nivel y Grado: visibles solo si modalidad es COLEGIO
+        if modalidad == "COLEGIO" and nivel and nivel != "--Seleccione":
+            self.lbl_nivel_preview.configure(text=nivel)
+            grado_texto = grado if (grado and grado != "--Seleccione") else ""
+            self.lbl_grado_preview.configure(text=grado_texto)
+            self.fr_nivel_badge.pack(side="left")
+        else:
+            self.fr_nivel_badge.pack_forget()
             
     def reset(self):
         self.lbl_preview_nombre.configure(text="NOMBRE APELLIDOS")
@@ -155,3 +202,6 @@ class StudentPreviewCard(ctk.CTkFrame):
         self.lbl_preview_dni.configure(text="DNI: --------")
         self.lbl_grupo_preview.configure(text="-")
         self.lbl_modalidad_preview.configure(text="-")
+        self.lbl_nivel_preview.configure(text="-")
+        self.lbl_grado_preview.configure(text="")
+        self.fr_nivel_badge.pack_forget()

@@ -87,12 +87,29 @@ class ListaService:
         db.refresh(lista)
         return lista
     
+    def quitar_alumno(self, db: Session, lista_id: int, alumno_id: int) -> bool:
+        """Quitar un alumno específico de una lista."""
+        lista = self.obtener_por_id(db, lista_id)
+        if not lista:
+            raise ValueError("Lista no encontrada")
+
+        alumno = db.query(Alumno).filter(Alumno.id == alumno_id).first()
+        if not alumno:
+            raise ValueError("Alumno no encontrado")
+
+        if alumno not in lista.alumnos:
+            raise ValueError("El alumno no pertenece a esta lista")
+
+        lista.alumnos.remove(alumno)
+        db.commit()
+        return True
+
     def eliminar(self, db: Session, lista_id: int) -> bool:
         """Eliminar lista."""
         lista = self.obtener_por_id(db, lista_id)
         if not lista:
             raise ValueError("Lista no encontrada")
-        
+
         db.delete(lista)
         db.commit()
         return True

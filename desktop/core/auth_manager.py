@@ -16,12 +16,15 @@ class AuthManager:
     
     def __init__(self):
         self.token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
         self.user_data: Optional[Dict] = None
         self.login_time: Optional[datetime] = None
     
-    def save_session(self, token: str, user_data: Dict, remember: bool = False):
-        """Guardar sesión actual"""
+    def save_session(self, token: str, user_data: Dict, remember: bool = False,
+                     refresh_token: Optional[str] = None):
+        """Guardar sesión actual — persiste access + refresh token"""
         self.token = token
+        self.refresh_token = refresh_token
         self.user_data = user_data
         self.login_time = datetime.now()
         
@@ -29,6 +32,7 @@ class AuthManager:
             try:
                 session_data = {
                     "token": token,
+                    "refresh_token": refresh_token,
                     "user_data": user_data,
                     "saved_at": self.login_time.isoformat()
                 }
@@ -46,6 +50,7 @@ class AuthManager:
             with open(Config.SESSION_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self.token = data.get("token")
+                self.refresh_token = data.get("refresh_token")
                 self.user_data = data.get("user_data")
                 return True
         except Exception as e:
@@ -55,6 +60,7 @@ class AuthManager:
     def clear_session(self):
         """Cerrar sesión y limpiar datos"""
         self.token = None
+        self.refresh_token = None
         self.user_data = None
         self.login_time = None
         

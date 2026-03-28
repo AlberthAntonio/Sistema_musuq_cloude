@@ -11,6 +11,10 @@ from app.core.config import settings
 # Contexto para hashing de contraseñas
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# Tipos de token
+TOKEN_TYPE_ACCESS = "access"
+TOKEN_TYPE_REFRESH = "refresh"
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verifica si una contraseña coincide con su hash."""
@@ -24,40 +28,68 @@ def get_password_hash(password: str) -> str:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
-    Crea un token JWT con los datos proporcionados.
+    Crea un token JWT de acceso.
     
     Args:
-        data: Diccionario con datos a incluir en el token (ej: {"sub": user_id})
+        data: Debe contener {"sub": str(user_id), "username": ..., "rol": ...}
         expires_delta: Tiempo de expiración opcional
     
     Returns:
         Token JWT codificado
     """
     to_encode = data.copy()
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    to_encode.update({"exp": expire, "type": TOKEN_TYPE_ACCESS})
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def create_refresh_token(data: dict) -> str:
+    """
+    Crea un token JWT de refresco (larga duración).
+    Firmado con REFRESH_SECRET_KEY diferente al access token.
     
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    Args:
+        data: Debe contener {"sub": str(user_id)}
     
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-    
-    return encoded_jwt
+    Returns:
+        Refresh token JWT codificado
+    """
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "type": TOKEN_TYPE_REFRESH})
+    return jwt.encode(to_encode, settings.REFRESH_SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def verify_token(token: str) -> Optional[dict]:
     """
-    Verifica y decodifica un token JWT.
-    
-    Args:
-        token: Token JWT a verificar
+    Verifica y decodifica un access token JWT.
     
     Returns:
-        Payload del token si es válido, None si es inválido
+        Payload del token si es válido y es tipo access, None si es inválido
     """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        # Validar que sea un access token
+        if payload.get("type") != TOKEN_TYPE_ACCESS:
+            return None
+        return payload
+    except JWTError:
+        return None
+
+
+def verify_refresh_token(token: str) -> Optional[dict]:
+    """
+    Verifica y decodifica un refresh token JWT.
+    
+    Returns:
+        Payload del token si es válido y es tipo refresh, None si es inválido
+    """
+    try:
+        payload = jwt.decode(token, settings.REFRESH_SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != TOKEN_TYPE_REFRESH:
+            return None
         return payload
     except JWTError:
         return None

@@ -134,46 +134,43 @@ class AsignarCursoView(ctk.CTkFrame):
         self.panel_asign = ctk.CTkFrame(self, fg_color="transparent")
         self.panel_asign.grid(row=0, column=1, sticky="nsew", padx=(0, 20), pady=20)
 
-        # ── Estado vacío inicial ──
+        self.frame_placeholder = ctk.CTkFrame(
+            self.panel_asign, fg_color=TM.bg_card(), corner_radius=12
+        )
+        self.frame_asignador = ctk.CTkFrame(
+            self.panel_asign, fg_color="transparent"
+        )
+
+        self._build_placeholder_frame()
+        self._build_asignador_frame()
         self._mostrar_placeholder()
 
-    def _mostrar_placeholder(self):
-        """Pantalla cuando no hay docente seleccionado."""
-        for w in self.panel_asign.winfo_children():
-            w.destroy()
-
-        fr = ctk.CTkFrame(self.panel_asign, fg_color=TM.bg_card(), corner_radius=12)
-        fr.pack(fill="both", expand=True)
-
+    def _build_placeholder_frame(self):
+        """Construye la pantalla cuando no hay docente seleccionado."""
         ctk.CTkLabel(
-            fr, text="📋",
+            self.frame_placeholder, text="📋",
             font=ctk.CTkFont(family="Arial", size=64)
         ).pack(expand=True, pady=(0, 10))
 
         ctk.CTkLabel(
-            fr,
+            self.frame_placeholder,
             text="Selecciona un docente",
             font=ctk.CTkFont(family="Roboto", size=18, weight="bold"),
             text_color=TM.text()
         ).pack()
 
         ctk.CTkLabel(
-            fr,
+            self.frame_placeholder,
             text="Elige un docente de la lista para asignarle cursos",
             font=ctk.CTkFont(family="Roboto", size=12),
             text_color=TM.text_secondary()
         ).pack(pady=(6, 0))
 
-    def _build_asignador(self):
-        """Construye el panel derecho para el docente activo."""
-        for w in self.panel_asign.winfo_children():
-            w.destroy()
-
-        d = self.docente_activo
-
+    def _build_asignador_frame(self):
+        """Construye el panel derecho para la asignacion."""
         # ── Header docente ──────────────────────────────────────────────────
         hdr = ctk.CTkFrame(
-            self.panel_asign,
+            self.frame_asignador,
             fg_color=TM.bg_card(),
             corner_radius=10,
             height=72
@@ -184,36 +181,35 @@ class AsignarCursoView(ctk.CTkFrame):
         hdr_inner = ctk.CTkFrame(hdr, fg_color="transparent")
         hdr_inner.pack(fill="both", expand=True, padx=20, pady=14)
 
-        ctk.CTkLabel(
+        self.lbl_docente_nombre = ctk.CTkLabel(
             hdr_inner,
-            text=f"👨‍🏫  {d.get('nombre', '')}",
+            text="",
             font=ctk.CTkFont(family="Roboto", size=16, weight="bold"),
             text_color=TM.text()
-        ).pack(side="left")
+        )
+        self.lbl_docente_nombre.pack(side="left")
 
-        esp = d.get("especialidad", "")
-        if esp and esp not in ("--", "-- Seleccione --", ""):
-            ctk.CTkLabel(
-                hdr_inner,
-                text=f"  ·  {esp}",
-                font=ctk.CTkFont(family="Roboto", size=12),
-                text_color=TM.text_secondary()
-            ).pack(side="left")
-
-        # Estado del docente
-        activo = d.get("activo", True)
-        ctk.CTkLabel(
+        self.lbl_docente_esp = ctk.CTkLabel(
             hdr_inner,
-            text="● Activo" if activo else "● Inactivo",
+            text="",
+            font=ctk.CTkFont(family="Roboto", size=12),
+            text_color=TM.text_secondary()
+        )
+        self.lbl_docente_esp.pack(side="left")
+
+        self.lbl_docente_estado = ctk.CTkLabel(
+            hdr_inner,
+            text="",
             font=ctk.CTkFont(family="Roboto", size=11, weight="bold"),
-            text_color=TM.success() if activo else TM.danger()
-        ).pack(side="right")
+            text_color=TM.success()
+        )
+        self.lbl_docente_estado.pack(side="right")
 
         # ── Título sección ──────────────────────────────────────────────────
-        self._seccion_label("ASIGNACIÓN DE CURSOS")
+        self._seccion_label("ASIGNACIÓN DE CURSOS", parent=self.frame_asignador)
 
         # ── Panel dual: Disponibles ◀▶ Asignados ───────────────────────────
-        dual = ctk.CTkFrame(self.panel_asign, fg_color="transparent")
+        dual = ctk.CTkFrame(self.frame_asignador, fg_color="transparent")
         dual.pack(fill="both", expand=True, pady=(0, 10))
         dual.grid_columnconfigure(0, weight=1)
         dual.grid_columnconfigure(1, minsize=52)
@@ -293,10 +289,10 @@ class AsignarCursoView(ctk.CTkFrame):
         self.lista_asig.pack(fill="both", expand=True, padx=6, pady=(0, 8))
 
         # ── Chips de cursos asignados ───────────────────────────────────────
-        self._seccion_label("RESUMEN")
+        self._seccion_label("RESUMEN", parent=self.frame_asignador)
 
         self.lbl_n_cursos = ctk.CTkLabel(
-            self.panel_asign,
+            self.frame_asignador,
             text="",
             font=ctk.CTkFont(family="Roboto", size=10),
             text_color=TM.text_secondary()
@@ -304,7 +300,7 @@ class AsignarCursoView(ctk.CTkFrame):
         self.lbl_n_cursos.pack(anchor="w", padx=4)
 
         self.frame_chips = ctk.CTkFrame(
-            self.panel_asign,
+            self.frame_asignador,
             fg_color=TM.bg_card(),
             corner_radius=8,
             height=52
@@ -313,7 +309,7 @@ class AsignarCursoView(ctk.CTkFrame):
 
         # ── Botón guardar ───────────────────────────────────────────────────
         self.btn_guardar = ctk.CTkButton(
-            self.panel_asign,
+            self.frame_asignador,
             text="💾  GUARDAR ASIGNACIÓN",
             height=44,
             corner_radius=10,
@@ -326,6 +322,37 @@ class AsignarCursoView(ctk.CTkFrame):
 
         # ── Poblar listas ───────────────────────────────────────────────────
         self._rebuild_listas()
+
+    def _mostrar_placeholder(self):
+        """Muestra el estado vacio y oculta el panel de asignacion."""
+        self.frame_asignador.pack_forget()
+        self.frame_placeholder.pack(fill="both", expand=True)
+
+    def _mostrar_asignador(self):
+        """Muestra el panel de asignacion y oculta el placeholder."""
+        self.frame_placeholder.pack_forget()
+        self.frame_asignador.pack(fill="both", expand=True)
+
+    def _actualizar_datos_header(self):
+        """Actualiza los datos del encabezado del docente activo."""
+        if not self.docente_activo:
+            return
+
+        d = self.docente_activo
+        nombre = d.get("nombre", "")
+        esp = d.get("especialidad", "") or ""
+        if esp in ("--", "-- Seleccione --", ""):
+            esp_text = ""
+        else:
+            esp_text = f"  ·  {esp}"
+
+        activo = d.get("activo", True)
+        estado_text = "● Activo" if activo else "● Inactivo"
+        estado_color = TM.success() if activo else TM.danger()
+
+        self.lbl_docente_nombre.configure(text=f"👨‍🏫  {nombre}")
+        self.lbl_docente_esp.configure(text=esp_text)
+        self.lbl_docente_estado.configure(text=estado_text, text_color=estado_color)
 
     # =========================================================================
     # CARGA DE DATOS DESDE API
@@ -441,37 +468,35 @@ class AsignarCursoView(ctk.CTkFrame):
         # Cargar cursos ya asignados al docente
         self.cursos_asig = self._obtener_cursos_docente(data)
 
-        # Reconstruir panel derecho
-        self._build_asignador()
+        # Actualizar panel derecho
+        self._actualizar_datos_header()
+        self._mostrar_asignador()
+        self._rebuild_listas()
 
         # Refrescar lista izquierda para marcar seleccionado
         self._cargar_docentes()
 
     def _obtener_cursos_docente(self, data: Dict) -> List[Dict]:
         """
-        Devuelve los cursos actualmente asignados al docente.
-        Cuando el backend esté listo usará la llamada real;
-        de momento lee el campo 'cursos' del dict si existe.
+        Devuelve los cursos actualmente asignados al docente
+        consultando al backend.
         """
-        cursos_txt = data.get("cursos", "") or ""
-        if not cursos_txt.strip():
+        docente_id = data.get("id")
+        if not docente_id:
             return []
 
-        nombres = [n.strip() for n in cursos_txt.split(",") if n.strip()]
-        # Mapear a objetos del catálogo de la API
-        result = []
-        for nombre in nombres:
-            match = next(
-                (c for c in self.cursos_api
-                 if c.get("nombre", "").strip().lower() == nombre.lower()),
-                None
-            )
-            if match:
-                result.append(match)
-            else:
-                # Curso asignado pero no en catálogo; lo incluimos igualmente
-                result.append({"id": None, "nombre": nombre})
-        return result
+        # Llamar al controlador para obtener cursos desde la API
+        cursos = self.docentes_ctrl.obtener_cursos_docente(docente_id)
+
+        # Asegurar que cada curso tenga al menos id y nombre
+        return [
+            {
+                "id": c.get("id"),
+                "nombre": c.get("nombre", ""),
+                "descripcion": c.get("descripcion", ""),
+            }
+            for c in cursos
+        ]
 
     # =========================================================================
     # LISTAS DISPONIBLES / ASIGNADOS
@@ -619,7 +644,7 @@ class AsignarCursoView(ctk.CTkFrame):
                 width=16, height=16,
                 corner_radius=8,
                 fg_color="transparent",
-                hover_color="#00000033",
+                hover_color="#000000",
                 text_color="white",
                 font=ctk.CTkFont(family="Arial", size=11, weight="bold"),
                 command=lambda c=curso: self._quitar_chip(c)
@@ -663,15 +688,18 @@ class AsignarCursoView(ctk.CTkFrame):
             # Refrescar
             self._cargar_cursos_api()
             self._cargar_docentes()
-            self._build_asignador()
+            self._actualizar_datos_header()
+            self._mostrar_asignador()
+            self._rebuild_listas()
         else:
             messagebox.showerror("❌ Error", msg)
 
     # =========================================================================
     # HELPERS VISUALES
     # =========================================================================
-    def _seccion_label(self, titulo: str):
-        fr = ctk.CTkFrame(self.panel_asign, fg_color="transparent")
+    def _seccion_label(self, titulo: str, parent=None):
+        container = parent if parent is not None else self.panel_asign
+        fr = ctk.CTkFrame(container, fg_color="transparent")
         fr.pack(fill="x", pady=(8, 4))
 
         ctk.CTkLabel(

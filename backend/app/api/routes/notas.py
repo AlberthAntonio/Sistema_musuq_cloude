@@ -1,8 +1,8 @@
 """
 Rutas CRUD para notas.
 """
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -12,6 +12,19 @@ from app.services.nota_service import nota_service
 from app.api.routes.auth import get_current_user
 
 router = APIRouter()
+
+
+@router.get("/")
+async def listar_notas(
+    alumno_id: Optional[int] = Query(None, description="Filtrar por alumno"),
+    sesion_id: Optional[int] = Query(None, description="Filtrar por sesión de examen"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """Listar notas con filtros opcionales. Compatible con el cliente desktop."""
+    return nota_service.listar(db, alumno_id=alumno_id, sesion_id=sesion_id, skip=skip, limit=limit)
 
 
 @router.get("/por-sesion/{sesion_id}")

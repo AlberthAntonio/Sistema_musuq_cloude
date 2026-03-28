@@ -29,7 +29,8 @@ class Horario(Base):
     hora_fin = Column(String(5), nullable=False)     # "09:30"
     
     # Ubicación
-    aula = Column(String(50), nullable=True)
+    aula_id = Column(Integer, ForeignKey("aulas.id", ondelete="SET NULL"), nullable=True, index=True)
+    aula = Column(String(50), nullable=True)  # Nombre display — sincronizado con aulas.nombre
     turno = Column(String(20), nullable=True)  # TURNO del bloque de clase: MAÑANA o TARDE
     # NOTA: No confundir con Alumno.horario (MATUTINO/VESPERTINO/DOBLE HORARIO)
     
@@ -42,11 +43,12 @@ class Horario(Base):
     # Relaciones
     curso = relationship("Curso", back_populates="horarios")
     docente = relationship("Docente", back_populates="horarios")
+    aula_obj = relationship("Aula", back_populates="horarios", foreign_keys=[aula_id])
     
     @property
     def dia_nombre(self) -> str:
-        dias = {1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 
-                4: 'Jueves', 5: 'Viernes', 6: 'Sábado'}
+        dias = {1: 'LUNES', 2: 'MARTES', 3: 'MIÉRCOLES', 
+                4: 'JUEVES', 5: 'VIERNES', 6: 'SÁBADO'}
         return dias.get(self.dia_semana, '')
     
     def __repr__(self):

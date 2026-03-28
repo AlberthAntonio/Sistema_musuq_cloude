@@ -20,6 +20,7 @@ class HorarioBase(BaseModel):
     hora_inicio: str
     hora_fin: str
     aula: Optional[str] = None
+    aula_id: Optional[int] = None  # FK a la tabla aulas
     turno: Optional[str] = None  # MAÑANA o TARDE (turno del bloque de clase)
 
 
@@ -38,6 +39,7 @@ class HorarioUpdate(BaseModel):
     hora_inicio: Optional[str] = None
     hora_fin: Optional[str] = None
     aula: Optional[str] = None
+    aula_id: Optional[int] = None  # FK a la tabla aulas
     turno: Optional[str] = None  # MAÑANA o TARDE (turno del bloque de clase)
     activo: Optional[bool] = None
 

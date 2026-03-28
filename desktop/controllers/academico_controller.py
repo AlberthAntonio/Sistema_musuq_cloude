@@ -46,12 +46,32 @@ class AcademicoController:
         else:
             return False, result.get("error", "Error al crear curso")
 
+    def eliminar_curso(self, curso_id: int) -> Tuple[bool, str]:
+        """Eliminar curso del catálogo"""
+        success, result = self.cursos_client.eliminar(curso_id)
+        if success:
+            return True, "Curso eliminado exitosamente"
+        return False, result.get("error", "Error al eliminar curso")
+
     def obtener_malla_grupo(self, grupo: str) -> List[Dict]:
         """Obtener cursos asignados a un grupo desde la malla curricular"""
-        success, result = self.cursos_client.obtener_por_grupo(grupo)
+        success, result = self.cursos_client.obtener_asignaciones_malla(grupo)
         if not success:
             return []
-        return result if isinstance(result, list) else result.get("items", [])
+
+        asignaciones = result if isinstance(result, list) else result.get("items", [])
+        malla_normalizada: List[Dict] = []
+
+        for item in asignaciones:
+            curso = item.get("curso") or {}
+            malla_normalizada.append({
+                "malla_id": item.get("id"),
+                "grupo": item.get("grupo", grupo),
+                "curso_id": item.get("curso_id") or curso.get("id"),
+                "nombre": curso.get("nombre", "Curso sin nombre"),
+            })
+
+        return malla_normalizada
 
     def agregar_curso_a_grupo(self, grupo: str, curso_id: int) -> Tuple[bool, str]:
         """Asignar curso a grupo en la malla curricular (POST /cursos/malla/)"""
@@ -89,51 +109,131 @@ class AcademicoController:
     def obtener_horario_grupo(self, grupo: str, periodo: str = "") -> Tuple[bool, str, Dict]:
         """Obtener horario de un grupo desde la API"""
         success, result = self.horarios_client.obtener_por_grupo(grupo)
-        
+
         if not success:
             return False, "No se pudo obtener el horario", {}
-        
+
         horarios = result if isinstance(result, list) else result.get("items", [])
-        
-        # Organizar por día
-        horario_por_dia = {}
+
+        horario_por_dia: Dict = {}
         for h in horarios:
-            dia = h.get("dia", 1)
+            dia  = h.get("dia_semana", h.get("dia", 1))
             slot = f"{h.get('hora_inicio', '')}-{h.get('hora_fin', '')}"
-            
+
             if dia not in horario_por_dia:
                 horario_por_dia[dia] = {}
-            
+
             horario_por_dia[dia][slot] = {
-                "id": h.get("id"),
-                "nombre_curso": h.get("curso", ""),
-                "nombre_docente": h.get("docente", ""),
-                "aula": h.get("aula", ""),
-                "dia": dia,
-                "hora_inicio": h.get("hora_inicio", ""),
-                "hora_fin": h.get("hora_fin", "")
+                "id":             h.get("id"),
+                "nombre_curso":   h.get("curso_nombre", h.get("curso", "")),
+                "nombre_docente": h.get("docente_nombre", h.get("docente", "")),
+                "aula":           h.get("aula", ""),
+                "grupo":          h.get("grupo", grupo),
+                "dia":            dia,
+                "hora_inicio":    h.get("hora_inicio", ""),
+                "hora_fin":       h.get("hora_fin", ""),
             }
-        
+
         return True, "Horario obtenido", horario_por_dia
 
-    def agregar_bloque_horario(self, grupo: str, dia: int, hora_inicio: str, 
-                               hora_fin: str, curso_id: int, docente_id: int, 
+    def obtener_horario_aula(
+        self, aula_id: int, grupo: str, periodo: str = ""
+    ) -> Tuple[bool, str, Dict]:
+        """
+        Obtiene los horarios de un aula específica (GET /aulas/{id}/horarios)
+        y los filtra por grupo, organizados por día.
+        """
+        success, result = self.horarios_client.obtener_por_aula(aula_id, periodo or None)
+
+        if not success:
+            return False, "No se pudo obtener el horario del aula", {}
+
+        horarios = result if isinstance(result, list) else result.get("items", [])
+
+        # Filtrar por grupo activo
+        if grupo:
+            horarios = [h for h in horarios if h.get("grupo", "") == grupo]
+
+        def _hm(t: str) -> str:
+            """Normaliza '08:00:00' → '08:00', tolerante con formatos cortos."""
+            if not t:
+                return t
+            parts = t.split(":")
+            return f"{parts[0]}:{parts[1]}" if len(parts) >= 2 else t
+
+        horario_por_dia: Dict = {}
+        for h in horarios:
+            dia  = h.get("dia_semana", h.get("dia", 1))
+            hi   = _hm(h.get("hora_inicio", ""))
+            hf   = _hm(h.get("hora_fin", ""))
+            slot = f"{hi}-{hf}"
+
+            if dia not in horario_por_dia:
+                horario_por_dia[dia] = {}
+
+            horario_por_dia[dia][slot] = {
+                "id":             h.get("id"),
+                "nombre_curso":   h.get("curso_nombre", h.get("curso", "")),
+                "nombre_docente": h.get("docente_nombre", h.get("docente", "")),
+                "aula":           h.get("aula", ""),
+                "grupo":          h.get("grupo", grupo),
+                "dia":            dia,
+                "hora_inicio":    hi,
+                "hora_fin":       hf,
+            }
+
+        return True, "Horario obtenido", horario_por_dia
+
+    def agregar_bloque_horario(self, grupo: str, dia: int, hora_inicio: str,
+                               hora_fin: str, curso_id: int, docente_id: int,
                                aula: str) -> Tuple[bool, str, Optional[int]]:
-        """Agregar bloque de horario"""
-        data = {
-            "grupo": grupo,
-            "dia": dia,
+        """Agregar bloque de horario (alias de agregar_bloque)"""
+        return self.agregar_bloque(
+            curso_id=curso_id,
+            docente_id=docente_id,
+            grupo=grupo,
+            dia_semana=dia,
+            hora_inicio=hora_inicio,
+            hora_fin=hora_fin,
+            aula=aula,
+        )
+
+    def agregar_bloque(
+        self,
+        curso_id: int,
+        docente_id: Optional[int],
+        grupo: str,
+        dia_semana: int,
+        hora_inicio: str,
+        hora_fin: str,
+        aula: Optional[str] = None,
+        aula_id: Optional[int] = None,
+        turno: Optional[str] = None,
+        periodo: str = "2026-I",
+    ) -> Tuple[bool, str, Optional[int]]:
+        """Crear un bloque horario en el backend (POST /horarios/)"""
+        data: Dict = {
+            "curso_id":    curso_id,
+            "grupo":       grupo,
+            "dia_semana":  dia_semana,
             "hora_inicio": hora_inicio,
-            "hora_fin": hora_fin,
-            "curso_id": curso_id,
-            "docente_id": docente_id,
-            "aula": aula
+            "hora_fin":    hora_fin,
+            "periodo":     periodo,
         }
+        if docente_id is not None:
+            data["docente_id"] = docente_id
+        if aula:
+            data["aula"] = aula
+        if aula_id is not None:
+            data["aula_id"] = aula_id
+        if turno:
+            data["turno"] = turno
+
         success, result = self.horarios_client.crear(data)
         if success:
-            return True, "Bloque agregado", result.get("id")
-        else:
-            return False, result.get("error", "Error al agregar bloque"), None
+            return True, "Bloque agregado correctamente", result.get("id")
+        error = result.get("detail") or result.get("error", "Error al agregar bloque")
+        return False, str(error), None
 
     def eliminar_bloque_horario(self, horario_id: int) -> Tuple[bool, str]:
         """Eliminar bloque de horario"""

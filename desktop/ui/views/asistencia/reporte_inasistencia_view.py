@@ -115,14 +115,32 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         # Inicializar scroll infinito
         self.init_infinite_scroll(self.scroll_tabla, lote_tamano=20)
 
-        # Estado vacío
-        self.empty_state = ctk.CTkLabel(
-            self.scroll_tabla,
-            text="\n🔍 No hay inasistencias para mostrar",
-            font=ctk.CTkFont(family="Roboto", size=14),
+        # Estado vacío (estatico)
+        self.empty_state_frame = ctk.CTkFrame(self.container_tabla, fg_color="transparent")
+        self.empty_state_frame.pack_forget()
+
+        self.empty_state_icon = ctk.CTkLabel(
+            self.empty_state_frame,
+            text="📭",
+            font=ctk.CTkFont(family="Arial", size=60)
+        )
+        self.empty_state_icon.pack(pady=10)
+
+        self.empty_state_title = ctk.CTkLabel(
+            self.empty_state_frame,
+            text="🔍 No hay inasistencias para mostrar",
+            font=ctk.CTkFont(family="Roboto", size=16, weight="bold"),
+            text_color=TM.text()
+        )
+        self.empty_state_title.pack()
+
+        self.empty_state_subtitle = ctk.CTkLabel(
+            self.empty_state_frame,
+            text="Ajuste los filtros e intente nuevamente",
+            font=ctk.CTkFont(family="Roboto", size=12),
             text_color=TM.text_secondary()
         )
-        self.empty_state.pack(pady=40)
+        self.empty_state_subtitle.pack(pady=(5, 0))
 
     def _crear_selector_fecha(self):
         """Crear selector de fecha con diseño premium"""
@@ -173,38 +191,29 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         self.fr_kpis.pack(side="left", fill="both", expand=True)
         self.fr_kpis.columnconfigure((0, 1, 2), weight=1)
 
-        # Inicializar KPIs
-        self._actualizar_kpis({"total": 0, "injustificadas": 0, "justificadas": 0})
+        self.kpi_value_labels = {}
 
-    def _actualizar_kpis(self, stats):
-        """Actualizar tarjetas KPI"""
-        # Limpiar
-        for w in self.fr_kpis.winfo_children():
-            w.destroy()
-
-        # Datos
         kpis_data = [
             {
+                "key": "total",
                 "titulo": "TOTAL AUSENTES",
-                "valor": str(stats.get("total", 0)),
                 "icono": "🚫",
                 "color": TM.text_secondary()
             },
             {
+                "key": "injustificadas",
                 "titulo": "SIN JUSTIFICAR",
-                "valor": str(stats.get("injustificadas", 0)),
                 "icono": "🔥",
                 "color": TM.danger()
             },
             {
+                "key": "justificadas",
                 "titulo": "JUSTIFICADOS",
-                "valor": str(stats.get("justificadas", 0)),
                 "icono": "✅",
                 "color": TM.success()
             }
         ]
 
-        # Crear tarjetas
         for i, kpi in enumerate(kpis_data):
             card = ctk.CTkFrame(
                 self.fr_kpis,
@@ -213,15 +222,12 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             )
             card.grid(row=0, column=i, padx=5, pady=0, sticky="nsew")
 
-            # Contenedor interno
             content = ctk.CTkFrame(card, fg_color="transparent")
             content.pack(fill="both", expand=True, padx=15, pady=15)
 
-            # Header con icono y título
             header = ctk.CTkFrame(content, fg_color="transparent")
             header.pack(fill="x")
 
-            # Icono de fondo sutil
             ctk.CTkLabel(
                 header,
                 text=kpi["icono"],
@@ -229,7 +235,6 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
                 text_color="#404040"
             ).pack(side="right")
 
-            # Título
             ctk.CTkLabel(
                 header,
                 text=kpi["titulo"],
@@ -238,22 +243,35 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
                 anchor="w"
             ).pack(side="left", fill="x", expand=True)
 
-            # Valor grande
-            ctk.CTkLabel(
+            value_lbl = ctk.CTkLabel(
                 content,
-                text=kpi["valor"],
+                text="0",
                 font=ctk.CTkFont(family="Roboto", size=32, weight="bold"),
                 text_color=TM.text(),
                 anchor="w"
-            ).pack(fill="x", pady=(5, 0))
+            )
+            value_lbl.pack(fill="x", pady=(5, 0))
+            self.kpi_value_labels[kpi["key"]] = value_lbl
 
-            # Línea decorativa
             ctk.CTkFrame(
                 content,
                 height=3,
                 fg_color=kpi["color"],
                 corner_radius=2
             ).pack(fill="x", pady=(10, 0))
+
+        # Inicializar KPIs
+        self._actualizar_kpis({"total": 0, "injustificadas": 0, "justificadas": 0})
+
+    def _actualizar_kpis(self, stats):
+        """Actualizar tarjetas KPI"""
+        self.kpi_value_labels["total"].configure(text=str(stats.get("total", 0)))
+        self.kpi_value_labels["injustificadas"].configure(
+            text=str(stats.get("injustificadas", 0))
+        )
+        self.kpi_value_labels["justificadas"].configure(
+            text=str(stats.get("justificadas", 0))
+        )
 
     def _crear_barra_filtros(self):
         """Crear barra de filtros con diseño premium"""
@@ -363,13 +381,21 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         titulos = ["CÓDIGO", "ALUMNO", "HORARIO", "CELULAR", "ESTADO", "CONTACTAR", "ACCIÓN"]
 
         for i, t in enumerate(titulos):
-            ctk.CTkLabel(
+            f_col = ctk.CTkFrame(
                 header,
+                fg_color="transparent",
+                width=self.ANCHOS[i],
+                height=40
+            )
+            f_col.pack(side="left", padx=0)
+            f_col.pack_propagate(False)
+            ctk.CTkLabel(
+                f_col,
                 text=t,
                 font=ctk.CTkFont(family="Roboto", size=11, weight="bold"),
                 text_color="white",
-                width=self.ANCHOS[i]
-            ).pack(side="left", padx=2)
+                anchor="center"
+            ).place(relx=0.5, rely=0.5, anchor="center")
 
     # ========================================================
     # LÓGICA DE BÚSQUEDA CON THREADING
@@ -385,7 +411,7 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         # Feedback visual
         self.lbl_loader.pack(side="left", padx=15)
         self.btn_buscar.configure(state="disabled", text="🔄 Cargando...")
-        self.empty_state.pack_forget()
+        self._mostrar_scroll_tabla()
 
         # Limpiar tabla
         self.limpiar_scroll()
@@ -441,37 +467,22 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             return
 
         # Cargar datos con scroll infinito
+        self._mostrar_scroll_tabla()
         self.cargar_datos_scroll(datos)
 
     def _mostrar_estado_vacio(self, mensaje):
         """Mostrar estado vacío elegante"""
-        for w in self.scroll_tabla.winfo_children():
-            w.destroy()
+        self.limpiar_scroll()
+        self.empty_state_title.configure(text=mensaje)
+        self._mostrar_empty_state()
 
-        empty_frame = ctk.CTkFrame(self.scroll_tabla, fg_color="transparent")
-        empty_frame.pack(fill="both", expand=True, pady=60)
+    def _mostrar_empty_state(self):
+        self.scroll_tabla.pack_forget()
+        self.empty_state_frame.pack(fill="both", expand=True, padx=5, pady=40)
 
-        # Icono
-        ctk.CTkLabel(
-            empty_frame,
-            text="📭",
-            font=ctk.CTkFont(family="Arial", size=60)
-        ).pack(pady=10)
-
-        # Mensaje
-        ctk.CTkLabel(
-            empty_frame,
-            text=mensaje,
-            font=ctk.CTkFont(family="Roboto", size=16, weight="bold"),
-            text_color=TM.text()
-        ).pack()
-
-        ctk.CTkLabel(
-            empty_frame,
-            text="Ajuste los filtros e intente nuevamente",
-            font=ctk.CTkFont(family="Roboto", size=12),
-            text_color=TM.text_secondary()
-        ).pack(pady=(5, 0))
+    def _mostrar_scroll_tabla(self):
+        self.empty_state_frame.pack_forget()
+        self.scroll_tabla.pack(fill="both", expand=True, padx=5, pady=5)
 
     # ========================================================
     # RENDERIZADO DE FILAS (SCROLL INFINITO)
@@ -504,78 +515,79 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         font_regular = ctk.CTkFont(family="Roboto", size=11)
         font_mono = ctk.CTkFont(family="Roboto Mono", size=11, weight="bold")
 
+        def _celda(ancho):
+            """Crear celda con ancho fijo para alineación exacta"""
+            f = ctk.CTkFrame(row, fg_color="transparent", width=ancho, height=40)
+            f.pack(side="left", padx=0)
+            f.pack_propagate(False)
+            f.bind("<Enter>", on_enter)
+            f.bind("<Leave>", on_leave)
+            return f
+
         # 1. CÓDIGO
+        f_cod = _celda(self.ANCHOS[0])
         lbl_codigo = ctk.CTkLabel(
-            row,
+            f_cod,
             text=d["codigo"],
-            width=self.ANCHOS[0],
             text_color=TM.text_secondary(),
             font=font_mono
         )
-        lbl_codigo.pack(side="left", padx=2, fill="y")
+        lbl_codigo.place(relx=0.5, rely=0.5, anchor="center")
         lbl_codigo.bind("<Enter>", on_enter)
         lbl_codigo.bind("<Leave>", on_leave)
 
         # 2. ALUMNO (con indicador de reincidente)
-        nom_txt = d["nombre"]
+        nom_txt = d["nombre"].upper()
         nom_col = TM.text()
 
         if d.get("reincidente", False):
             nom_txt = f"🔥 {nom_txt}"
             nom_col = TM.warning()
 
+        f_nom = _celda(self.ANCHOS[1])
         lbl_nombre = ctk.CTkLabel(
-            row,
+            f_nom,
             text=nom_txt,
-            width=self.ANCHOS[1],
             anchor="w",
             text_color=nom_col,
             font=ctk.CTkFont(family="Roboto", size=11, weight="bold")
         )
-        lbl_nombre.pack(side="left", padx=2, fill="y")
+        lbl_nombre.place(x=6, rely=0.5, anchor="w")
         lbl_nombre.bind("<Enter>", on_enter)
         lbl_nombre.bind("<Leave>", on_leave)
 
         # 3. HORARIO
+        f_hor = _celda(self.ANCHOS[2])
         lbl_turno = ctk.CTkLabel(
-            row,
-            text=d["horario"],
-            width=self.ANCHOS[2],
+            f_hor,
+            text=d["horario"].upper(),
             text_color=TM.text_secondary(),
             font=font_regular
         )
-        lbl_turno.pack(side="left", padx=2, fill="y")
+        lbl_turno.place(relx=0.5, rely=0.5, anchor="center")
         lbl_turno.bind("<Enter>", on_enter)
         lbl_turno.bind("<Leave>", on_leave)
 
         # 4. CELULAR
+        f_cel = _celda(self.ANCHOS[3])
         lbl_cel = ctk.CTkLabel(
-            row,
+            f_cel,
             text=d["celular"],
-            width=self.ANCHOS[3],
             text_color=TM.text_secondary(),
             font=font_regular
         )
-        lbl_cel.pack(side="left", padx=2, fill="y")
+        lbl_cel.place(relx=0.5, rely=0.5, anchor="center")
         lbl_cel.bind("<Enter>", on_enter)
         lbl_cel.bind("<Leave>", on_leave)
 
-        # 5. ESTADO (Badge)
+        # 5. ESTADO (Badge) — controller devuelve "Falta" o "Justificado"
         st_txt = d["estado"]
-        st_bg = TM.danger() if st_txt == "INASISTENCIA" else TM.success()
+        st_bg = TM.danger() if st_txt.upper() in ("INASISTENCIA", "FALTA") else "#5dade2"
 
-        f_st = ctk.CTkFrame(
-            row,
-            fg_color="transparent",
-            width=self.ANCHOS[4],
-            height=40
-        )
-        f_st.pack(side="left", padx=2)
-        f_st.pack_propagate(False)
-
+        f_st = _celda(self.ANCHOS[4])
         badge = ctk.CTkLabel(
             f_st,
-            text=st_txt,
+            text=st_txt.upper(),
             fg_color=st_bg,
             text_color="white",
             corner_radius=5,
@@ -584,19 +596,9 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             font=ctk.CTkFont(family="Roboto", size=9, weight="bold")
         )
         badge.place(relx=0.5, rely=0.5, anchor="center")
-        f_st.bind("<Enter>", on_enter)
-        f_st.bind("<Leave>", on_leave)
 
         # 6. BOTÓN WHATSAPP
-        f_wa = ctk.CTkFrame(
-            row,
-            fg_color="transparent",
-            width=self.ANCHOS[5],
-            height=40
-        )
-        f_wa.pack(side="left", padx=2)
-        f_wa.pack_propagate(False)
-
+        f_wa = _celda(self.ANCHOS[5])
         btn_wa = ctk.CTkButton(
             f_wa,
             text="📲",
@@ -611,16 +613,9 @@ class ReporteInasistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         btn_wa.place(relx=0.5, rely=0.5, anchor="center")
 
         # 7. BOTÓN JUSTIFICAR / CHECK
-        f_jus = ctk.CTkFrame(
-            row,
-            fg_color="transparent",
-            width=self.ANCHOS[6],
-            height=40
-        )
-        f_jus.pack(side="left", padx=2)
-        f_jus.pack_propagate(False)
+        f_jus = _celda(self.ANCHOS[6])
 
-        if st_txt == "INASISTENCIA":
+        if st_txt.upper() in ("INASISTENCIA", "FALTA"):
             btn_jus = ctk.CTkButton(
                 f_jus,
                 text="📝",

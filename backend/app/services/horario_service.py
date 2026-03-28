@@ -26,27 +26,59 @@ class HorarioService:
         return db.query(Docente).filter(Docente.id == docente_id).first() is not None
     
     def validar_conflicto_horario(
-        self, 
-        db: Session, 
-        grupo: str, 
-        dia_semana: int, 
-        hora_inicio: str, 
+        self,
+        db: Session,
+        grupo: str,
+        dia_semana: int,
+        hora_inicio: str,
         hora_fin: str,
-        horario_id: Optional[int] = None
+        horario_id: Optional[int] = None,
+        periodo: Optional[str] = None,
     ) -> bool:
-        """Verifica si hay conflicto de horario para el grupo. Retorna True si NO hay conflicto."""
+        """Verifica conflicto de horario para el grupo. Retorna True si NO hay conflicto."""
         query = db.query(Horario).filter(
             Horario.grupo == grupo,
             Horario.dia_semana == dia_semana,
-            Horario.activo == True
+            Horario.activo == True,
         )
+        if periodo:
+            query = query.filter(Horario.periodo == periodo)
         if horario_id:
             query = query.filter(Horario.id != horario_id)
-        
+
         # Verificar superposición de horas
         for h in query.all():
             if not (hora_fin <= h.hora_inicio or hora_inicio >= h.hora_fin):
-                return False  # Hay conflicto
+                return False
+        return True
+
+    def validar_conflicto_docente(
+        self,
+        db: Session,
+        docente_id: Optional[int],
+        dia_semana: int,
+        hora_inicio: str,
+        hora_fin: str,
+        horario_id: Optional[int] = None,
+        periodo: Optional[str] = None,
+    ) -> bool:
+        """Verifica conflicto de horario para el docente. Retorna True si NO hay conflicto."""
+        if not docente_id:
+            return True
+
+        query = db.query(Horario).filter(
+            Horario.docente_id == docente_id,
+            Horario.dia_semana == dia_semana,
+            Horario.activo == True,
+        )
+        if periodo:
+            query = query.filter(Horario.periodo == periodo)
+        if horario_id:
+            query = query.filter(Horario.id != horario_id)
+
+        for h in query.all():
+            if not (hora_fin <= h.hora_inicio or hora_inicio >= h.hora_fin):
+                return False
         return True
     
     # ==================== OPERACIONES CRUD ====================
@@ -88,9 +120,24 @@ class HorarioService:
         
         # Validar no hay conflicto de horario
         if not self.validar_conflicto_horario(
-            db, datos.grupo, datos.dia_semana, datos.hora_inicio, datos.hora_fin
+            db,
+            datos.grupo,
+            datos.dia_semana,
+            datos.hora_inicio,
+            datos.hora_fin,
+            periodo=datos.periodo,
         ):
             raise ValueError("Ya existe un horario en ese bloque para este grupo")
+
+        if not self.validar_conflicto_docente(
+            db,
+            datos.docente_id,
+            datos.dia_semana,
+            datos.hora_inicio,
+            datos.hora_fin,
+            periodo=datos.periodo,
+        ):
+            raise ValueError("El docente asignado ya esta en ese horario")
         
         horario = Horario(**datos.model_dump())
         db.add(horario)
@@ -150,14 +197,19 @@ class HorarioService:
             raise ValueError("Docente no encontrado")
         
         # Validar conflicto si se cambian día/hora
-        if any(k in update_data for k in ["grupo", "dia_semana", "hora_inicio", "hora_fin"]):
+        if any(k in update_data for k in ["grupo", "dia_semana", "hora_inicio", "hora_fin", "periodo"]):
             grupo = update_data.get("grupo", horario.grupo)
             dia = update_data.get("dia_semana", horario.dia_semana)
             inicio = update_data.get("hora_inicio", horario.hora_inicio)
             fin = update_data.get("hora_fin", horario.hora_fin)
-            
-            if not self.validar_conflicto_horario(db, grupo, dia, inicio, fin, horario_id):
+            periodo = update_data.get("periodo", horario.periodo)
+
+            if not self.validar_conflicto_horario(db, grupo, dia, inicio, fin, horario_id, periodo):
                 raise ValueError("Ya existe un horario en ese bloque para este grupo")
+
+            docente_id = update_data.get("docente_id", horario.docente_id)
+            if not self.validar_conflicto_docente(db, docente_id, dia, inicio, fin, horario_id, periodo):
+                raise ValueError("El docente asignado ya esta en ese horario")
         
         for field, value in update_data.items():
             setattr(horario, field, value)
