@@ -4,42 +4,86 @@ Sistema Musuq Cloud
 
 import httpx
 from typing import Optional, Dict, Any, Tuple, List
+import threading
 from .config import Config
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class APIClient:
     """Cliente base para llamadas a la API"""
+
+    _shared_client: Optional[httpx.Client] = None
+    _shared_timeout: Optional[float] = None
+    _shared_lock = threading.Lock()
+
+    _session_loaded = False
+    _session_token: Optional[str] = None
+    _session_refresh: Optional[str] = None
+    _session_lock = threading.Lock()
+
+    @classmethod
+    def _get_shared_client(cls, timeout: float) -> httpx.Client:
+        with cls._shared_lock:
+            if cls._shared_client is None or cls._shared_timeout != timeout:
+                if cls._shared_client is not None:
+                    try:
+                        cls._shared_client.close()
+                    except Exception:
+                        pass
+                cls._shared_client = httpx.Client(timeout=timeout)
+                cls._shared_timeout = timeout
+            return cls._shared_client
+
+    @classmethod
+    def _load_session_once(cls):
+        if cls._session_loaded:
+            return
+        with cls._session_lock:
+            if cls._session_loaded:
+                return
+            try:
+                from .auth_manager import AuthManager
+                auth = AuthManager()
+                if auth.load_session():
+                    cls._session_token = auth.token
+                    cls._session_refresh = auth.refresh_token
+            except Exception as e:
+                logger.debug(f"No se pudo cargar sesión automática: {e}")
+            finally:
+                cls._session_loaded = True
+
+    @classmethod
+    def _update_session_cache(cls, token: Optional[str], refresh_token: Optional[str]):
+        with cls._session_lock:
+            cls._session_loaded = True
+            cls._session_token = token
+            cls._session_refresh = refresh_token
     
-    def __init__(self):
+    def __init__(self, load_cached_session: bool = True):
         self.base_url = Config.API_BASE_URL
         self.timeout = Config.API_TIMEOUT
         self.token: Optional[str] = None
         self.refresh_token: Optional[str] = None
-        # Persistent client for connection pooling (reutiliza conexiones TCP)
-        self._client = httpx.Client(timeout=self.timeout)
-    
-        try:
-            # Importación local para evitar ciclos
-            from .auth_manager import AuthManager 
-            auth = AuthManager()
-            if auth.load_session():
-                self.token = auth.token
-                self.refresh_token = auth.refresh_token
-        except Exception as e:
-            print(f"[WARN] No se pudo cargar sesión automática: {e}")
+        # Cliente compartido para evitar overhead al crear decenas de API clients.
+        self._client = self._get_shared_client(self.timeout)
+
+        if load_cached_session:
+            self._load_session_once()
+            self.token = self._session_token
+            self.refresh_token = self._session_refresh
 
 
     def __del__(self):
-        """Cerrar cliente HTTP al destruir la instancia"""
-        try:
-            if hasattr(self, '_client'):
-                self._client.close()
-        except:
-            pass
+        """No cerrar cliente compartido desde instancias individuales."""
+        pass
     
-    def _get_headers(self) -> Dict[str, str]:
-        """Obtener headers con autenticación"""
-        headers = {"Content-Type": "application/json"}
+    def _get_headers(self, include_content_type: bool = True) -> Dict[str, str]:
+        """Obtener headers con autenticación."""
+        headers: Dict[str, str] = {}
+        if include_content_type:
+            headers["Content-Type"] = "application/json"
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
@@ -58,6 +102,7 @@ class APIClient:
                 data = response.json()
                 self.token = data.get("access_token")
                 self.refresh_token = data.get("refresh_token", self.refresh_token)
+                self._update_session_cache(self.token, self.refresh_token)
                 # Persistir en session.json
                 try:
                     from .auth_manager import AuthManager
@@ -77,7 +122,9 @@ class APIClient:
     def _request(self, method: str, endpoint: str, **kwargs) -> Tuple[bool, Dict[str, Any]]:
         """Realizar petición HTTP con auto-refresh en 401"""
         url = f"{self.base_url}{endpoint}"
-        headers = self._get_headers()
+        is_multipart = "files" in kwargs
+        is_form_data = "data" in kwargs and "json" not in kwargs
+        headers = self._get_headers(include_content_type=not (is_multipart or is_form_data))
         
         try:
             response = self._client.request(
@@ -88,18 +135,24 @@ class APIClient:
             )
             
             if response.status_code in (200, 201):
-                return True, response.json()
+                content_type = response.headers.get("content-type", "")
+                if "application/json" in content_type:
+                    return True, response.json()
+                return True, {"content": response.content, "content_type": content_type}
             elif response.status_code == 204:
                 return True, {}
             elif response.status_code == 401:
                 # Intentar renovar tokens una sola vez
                 if self.refresh_token and self._do_refresh():
-                    headers2 = self._get_headers()
+                    headers2 = self._get_headers(include_content_type=not (is_multipart or is_form_data))
                     response2 = self._client.request(
                         method=method, url=url, headers=headers2, **kwargs
                     )
                     if response2.status_code in (200, 201):
-                        return True, response2.json()
+                        content_type = response2.headers.get("content-type", "")
+                        if "application/json" in content_type:
+                            return True, response2.json()
+                        return True, {"content": response2.content, "content_type": content_type}
                     elif response2.status_code == 204:
                         return True, {}
                 return False, {"error": "No autorizado. Token inválido o expirado."}
@@ -123,13 +176,63 @@ class APIClient:
         except Exception as e:
             return False, {"error": str(e)}
     
-    def get(self, endpoint: str, params: Optional[Dict] = None) -> Tuple[bool, Dict]:
-        """Petición GET"""
-        return self._request("GET", endpoint, params=params)
+    def get(self, endpoint: str, params: Optional[Dict] = None) -> Tuple[bool, Any]:
+        """Petición GET. Si limit excede el máximo del Backend (200), orquesta múltiples request silenciosos."""
+        if not params or "limit" not in params:
+            return self._request("GET", endpoint, params=params)
+            
+        limit_req = params.get("limit")
+        try:
+            limit_int = int(limit_req)
+        except (ValueError, TypeError):
+            return self._request("GET", endpoint, params=params)
+            
+        if limit_int <= 200:
+            return self._request("GET", endpoint, params=params)
+            
+        # Estrategia Profesional: Dividir el pedido masivo del cliente Tkinter 
+        # en páginas de 200 transparentes al usuario UI.
+        chunk_size = 200
+        skip_inicial = int(params.get("skip", 0))
+        cargados = 0
+        all_results = []
+        last_data = []  # para rastrear formato dict o list
+        
+        while cargados < limit_int:
+            batch_params = params.copy()
+            batch_params["limit"] = min(chunk_size, limit_int - cargados)
+            batch_params["skip"] = skip_inicial + cargados
+            
+            # Quitar None values que rompen httpx -> FastAPI
+            batch_params = {k: v for k, v in batch_params.items() if v is not None}
+            
+            ok, data = self._request("GET", endpoint, params=batch_params)
+            if not ok:
+                if cargados > 0:
+                    break  # Retornar lo que ya cargó antes de fallar
+                return False, data
+                
+            items = data if isinstance(data, list) else data.get("items", [])
+            all_results.extend(items)
+            cargados += len(items)
+            last_data = data
+            
+            if len(items) < batch_params["limit"]:
+                break  # Fin de tabla
+                
+        # Mantener contrato de retorno
+        if isinstance(last_data, dict):
+            last_data["items"] = all_results
+            return True, last_data
+        return True, all_results
     
     def post(self, endpoint: str, data: Optional[Dict] = None) -> Tuple[bool, Dict]:
         """Petición POST"""
         return self._request("POST", endpoint, json=data)
+
+    def post_multipart(self, endpoint: str, files: Dict[str, Any], data: Optional[Dict] = None) -> Tuple[bool, Dict]:
+        """Petición POST multipart/form-data."""
+        return self._request("POST", endpoint, data=data or {}, files=files)
     
     def put(self, endpoint: str, data: Optional[Dict] = None) -> Tuple[bool, Dict]:
         """Petición PUT"""
@@ -160,6 +263,7 @@ class AuthClient(APIClient):
                 data = response.json()
                 self.token = data.get("access_token")
                 self.refresh_token = data.get("refresh_token")
+                self._update_session_cache(self.token, self.refresh_token)
                 
                 # Obtener datos del usuario
                 user_success, user_data = self.get_current_user()
@@ -207,6 +311,17 @@ class AlumnoClient(APIClient):
     def crear(self, data: Dict) -> Tuple[bool, Dict]:
         """Crear nuevo alumno"""
         return self.post("/alumnos/", data=data)
+
+    def subir_foto(self, alumno_id: int, foto_bytes: bytes, filename: str = "foto.jpg", mime_type: str = "image/jpeg") -> Tuple[bool, Dict]:
+        """Subir o reemplazar foto del alumno."""
+        files = {
+            "archivo": (filename, foto_bytes, mime_type)
+        }
+        return self.post_multipart(f"/alumnos/{alumno_id}/foto", files=files)
+
+    def eliminar_foto(self, alumno_id: int) -> Tuple[bool, Dict]:
+        """Eliminar foto del alumno."""
+        return self.delete(f"/alumnos/{alumno_id}/foto")
     
     def actualizar(self, alumno_id: int, data: Dict) -> Tuple[bool, Dict]:
         """Actualizar alumno"""
@@ -223,14 +338,9 @@ class AlumnoClient(APIClient):
     
     def buscar(self, query: str) -> Tuple[bool, Dict]:
         """Buscar alumnos por nombre o código"""
-        print(f"[DEBUG API] Buscando: '{query}'")
-        print(f"[DEBUG API] URL completa: {self.base_url}/alumnos/buscar?q={query}")
         success, result = self.get("/alumnos/buscar", params={"q": query})
-        print(f"[DEBUG API] Success: {success}, Tipo resultado: {type(result)}")
-        if success:
-            print(f"[DEBUG API] Contenido: {result}")
-        else:
-            print(f"[DEBUG API] Error: {result}")
+        if not success:
+            logger.debug(f"Búsqueda '{query}' falló: {result}")
         return success, result
 
 
@@ -241,7 +351,7 @@ class DashboardClient(APIClient):
     def get_stats(self) -> Tuple[bool, Dict]:
         """Obtener estadísticas generales usando datos reales del backend"""
         # Obtener conteo de alumnos
-        success_a, data_a = self.get("/alumnos/", params={"limit": 1000})
+        success_a, data_a = self.get("/alumnos/", params={"limit": 200})
         if not success_a:
             return False, data_a
 
@@ -469,12 +579,80 @@ class HorariosClient(APIClient):
         """Obtener horarios de un grupo"""
         return self.get("/horarios/por-grupo/{}".format(grupo))
 
-    def obtener_por_aula(self, aula_id: int, periodo: Optional[str] = None) -> Tuple[bool, Dict]:
+    def obtener_por_aula(
+        self,
+        aula_id: int,
+        periodo: Optional[str] = None,
+        grupo: Optional[str] = None,
+        turno: Optional[str] = None,
+    ) -> Tuple[bool, Dict]:
         """GET /aulas/{id}/horarios — horarios de un aula específica"""
         params: Dict[str, Any] = {}
         if periodo:
             params["periodo"] = periodo
+        if grupo:
+            params["grupo"] = grupo
+        if turno:
+            params["turno"] = turno
         return self.get(f"/aulas/{aula_id}/horarios", params=params)
+
+
+class PlantillasHorarioClient(APIClient):
+    """Cliente para gestión de plantillas de horario."""
+
+    def listar_plantillas(
+        self,
+        aula_id: Optional[int] = None,
+        grupo: Optional[str] = None,
+        periodo: Optional[str] = None,
+        turno: Optional[str] = None,
+        activo: Optional[bool] = True,
+    ) -> Tuple[bool, Dict]:
+        params: Dict[str, Any] = {}
+        if aula_id is not None:
+            params["aula_id"] = aula_id
+        if grupo:
+            params["grupo"] = grupo
+        if periodo:
+            params["periodo"] = periodo
+        if turno:
+            params["turno"] = turno
+        if activo is not None:
+            params["activo"] = activo
+        return self.get("/plantillas-horario/", params=params)
+
+    def crear_plantilla(self, data: Dict) -> Tuple[bool, Dict]:
+        return self.post("/plantillas-horario/", data=data)
+
+    def listar_bloques(self, plantilla_id: int, activo: Optional[bool] = True) -> Tuple[bool, Dict]:
+        params: Dict[str, Any] = {}
+        if activo is not None:
+            params["activo"] = activo
+        return self.get(f"/plantillas-horario/{plantilla_id}/bloques", params=params)
+
+    def crear_bloque(self, plantilla_id: int, data: Dict) -> Tuple[bool, Dict]:
+        return self.post(f"/plantillas-horario/{plantilla_id}/bloques", data=data)
+
+    def actualizar_bloque(self, bloque_id: int, data: Dict) -> Tuple[bool, Dict]:
+        return self.put(f"/plantilla-bloques/{bloque_id}", data=data)
+
+    def eliminar_bloque(self, bloque_id: int) -> Tuple[bool, Dict]:
+        return self.delete(f"/plantilla-bloques/{bloque_id}")
+
+    def obtener_grilla_final(
+        self,
+        aula_id: int,
+        grupo: str,
+        periodo: str,
+        turno: str,
+    ) -> Tuple[bool, Dict]:
+        params = {
+            "aula_id": aula_id,
+            "grupo": grupo,
+            "periodo": periodo,
+            "turno": turno,
+        }
+        return self.get("/plantillas-horario/grilla-final", params=params)
 
 
 class EventosClient(APIClient):
@@ -588,11 +766,11 @@ class PagosClient(APIClient):
         """Eliminar pago"""
         return self.delete(f"/pagos/{pago_id}")
     
-    def obtener_por_alumno(self, alumno_id: int) -> Tuple[bool, Dict]:
-        """Obtener resumen de pagos de un alumno (usa /pagos/resumen/{id})"""
-        return self.get(f"/pagos/resumen/{alumno_id}")
+    def obtener_por_matricula(self, matricula_id: int) -> Tuple[bool, Dict]:
+        """Obtener resumen de pagos (usa GET /pagos/resumen/matricula/{id})"""
+        return self.get(f"/pagos/resumen/matricula/{matricula_id}")
     
-    def listar_por_alumno(self, alumno_id: int, limit: int = 500) -> Tuple[bool, Dict]:
+    def listar_por_alumno(self, alumno_id: int, limit: int = 100) -> Tuple[bool, Dict]:
         """Obtener lista de pagos de un alumno (GET /pagos/?alumno_id=X)"""
         return self.get("/pagos/", params={"alumno_id": alumno_id, "limit": limit})
 

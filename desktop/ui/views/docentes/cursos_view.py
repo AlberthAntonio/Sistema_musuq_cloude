@@ -7,10 +7,15 @@ Panel dual: Catálogo de cursos + Malla curricular por grupos
 import customtkinter as ctk
 from tkinter import messagebox
 from customtkinter import CTkFont
+import threading
+import time
 
 from controllers.academico_controller import AcademicoController
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class CursosView(ctk.CTkFrame):
@@ -21,18 +26,51 @@ class CursosView(ctk.CTkFrame):
 
     def __init__(self, parent, auth_client=None):
         super().__init__(parent, fg_color="transparent")
-        self.controller = AcademicoController(auth_client.token if auth_client else "")
+        self._auth_token = auth_client.token if auth_client else ""
+        self.controller = None
         self.grupos_base = ["A", "B", "C", "D"]
         self.grupo_todos = "TODOS"
 
         # Cache de datos para filtrado rápido
         self.todos_los_cursos = []
+        self._malla_cache = {}  # {grupo: [items]}
+        self._cache_ts = 0  # Timestamp del último fetch
+        self._cache_ttl = 60  # Segundos de validez del cache
+        self._request_id = 0
+        self._ui_ready = False
+        self._loading_frame = None
+
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder inicial mientras se crea la vista."""
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando gestion de cursos...",
+            font=CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye widgets y dispara carga inicial fuera del constructor."""
+        if self._ui_ready:
+            return
+
+        if self.controller is None:
+            self.controller = AcademicoController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
 
         self.create_widgets()
-
-        # Carga inicial
-        self.cargar_catalogo_bd()
-        self.cargar_mallas()
+        self._cargar_todo_async()
+        self._ui_ready = True
 
     def create_widgets(self):
         # Layout principal con grid
@@ -296,8 +334,33 @@ class CursosView(ctk.CTkFrame):
             messagebox.showerror("Error", msg)
 
     def cargar_catalogo_bd(self):
-        """Cargar catálogo desde base de datos"""
-        self.todos_los_cursos = self.controller.obtener_catalogo()
+        """Cargar catálogo desde base de datos (background thread)"""
+        self._request_id += 1
+        req_id = self._request_id
+
+        # Mostrar loading en lista de cursos
+        for w in self.scroll_cursos.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self.scroll_cursos,
+            text="⏳ Cargando catálogo...",
+            font=CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        ).pack(pady=20)
+
+        def _hilo():
+            cursos = self.controller.obtener_catalogo()
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._aplicar_catalogo(cursos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_catalogo(self, cursos):
+        """Aplicar catálogo a la UI (hilo principal)"""
+        if not self.winfo_exists():
+            return
+        self.todos_los_cursos = cursos
+        self._cache_ts = time.time()
         self.filtrar_catalogo()
 
     def filtrar_catalogo(self, event=None):
@@ -438,24 +501,121 @@ class CursosView(ctk.CTkFrame):
     # ========================================================
 
     def cargar_mallas(self):
-        """Recargar chips de todos los grupos"""
+        """Recargar chips de todos los grupos (background thread)"""
+        self._request_id += 1
+        req_id = self._request_id
+
+        # Mostrar loading en cada tab
+        for grupo, scroll_widget in self.tabs_data.items():
+            for w in scroll_widget.winfo_children():
+                w.destroy()
+            ctk.CTkLabel(
+                scroll_widget,
+                text="⏳ Cargando malla...",
+                font=CTkFont(family="Roboto", size=11),
+                text_color=TM.text_secondary()
+            ).pack(pady=20)
+
+        def _hilo():
+            # Cargar malla de cada grupo base
+            malla_data = {}
+            for grupo in self.grupos_base:
+                malla_data[grupo] = self.controller.obtener_malla_grupo(grupo)
+
+            # Construir TODOS desde cache local (sin roundtrips extra)
+            malla_data[self.grupo_todos] = self._build_todos_from_cache(malla_data)
+
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._aplicar_mallas(malla_data))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _build_todos_from_cache(self, malla_data):
+        """Construir vista TODOS desde datos ya cargados (sin roundtrips extra)"""
+        claves_por_grupo = []
+        nombres_por_clave = {}
+
+        for grupo in self.grupos_base:
+            claves_grupo = set()
+            for item in malla_data.get(grupo, []):
+                curso_id = item.get("curso_id")
+                if curso_id is None:
+                    curso_id = item.get("id")
+                clave = curso_id if curso_id is not None else item.get("nombre", "").strip().lower()
+
+                if clave is None:
+                    continue
+
+                claves_grupo.add(clave)
+                if clave not in nombres_por_clave:
+                    nombres_por_clave[clave] = item.get("nombre", "Curso sin nombre")
+
+            claves_por_grupo.append(claves_grupo)
+
+        if not claves_por_grupo:
+            return []
+
+        claves_comunes = set.intersection(*claves_por_grupo)
+        return [
+            {"nombre": nombres_por_clave.get(clave, "Curso sin nombre"), "solo_lectura": True}
+            for clave in claves_comunes
+        ]
+
+    def _aplicar_mallas(self, malla_data):
+        """Aplicar datos de malla a los tabs (hilo principal)"""
+        if not self.winfo_exists():
+            return
+
+        self._malla_cache = malla_data
+
         for grupo, scroll_widget in self.tabs_data.items():
             # Limpiar
             for w in scroll_widget.winfo_children():
                 w.destroy()
 
-            # En TODOS mostramos una vista consolidada sin acciones de borrado.
-            if grupo == self.grupo_todos:
-                asignaciones = self._obtener_malla_consolidada()
-            else:
-                asignaciones = self.controller.obtener_malla_grupo(grupo)
+            asignaciones = malla_data.get(grupo, [])
 
             if not asignaciones:
                 self._mostrar_estado_vacio_malla(scroll_widget, grupo)
                 continue
 
-            # Dibujar chips en grid
             self._dibujar_chips_grid(scroll_widget, asignaciones)
+
+    def _cargar_todo_async(self):
+        """Carga inicial: catálogo y mallas en paralelo"""
+        self._request_id += 1
+        req_id = self._request_id
+
+        # Loading en catálogo
+        for w in self.scroll_cursos.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self.scroll_cursos,
+            text="⏳ Cargando...",
+            font=CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        ).pack(pady=20)
+
+        def _hilo():
+            cursos = self.controller.obtener_catalogo()
+            malla_data = {}
+            for grupo in self.grupos_base:
+                malla_data[grupo] = self.controller.obtener_malla_grupo(grupo)
+            malla_data[self.grupo_todos] = self._build_todos_from_cache(malla_data)
+
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._aplicar_carga_inicial(cursos, malla_data))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_carga_inicial(self, cursos, malla_data):
+        """Aplicar carga inicial completa"""
+        if not self.winfo_exists():
+            return
+        self.todos_los_cursos = cursos
+        self._cache_ts = time.time()
+        self.filtrar_catalogo()
+        self._aplicar_mallas(malla_data)
 
     def _dibujar_chips_grid(self, parent, asignaciones):
         """Dibujar chips en layout grid"""
@@ -532,41 +692,6 @@ class CursosView(ctk.CTkFrame):
             or curso_item.get("id")
         )
 
-    def _obtener_malla_consolidada(self):
-        """Construir vista TODOS con cursos que existen en A, B, C y D."""
-        claves_por_grupo = []
-        nombres_por_clave = {}
-
-        for grupo in self.grupos_base:
-            claves_grupo = set()
-            for item in self.controller.obtener_malla_grupo(grupo):
-                curso_id = item.get("curso_id")
-                if curso_id is None:
-                    curso_id = item.get("id")
-                clave = curso_id if curso_id is not None else item.get("nombre", "").strip().lower()
-
-                if clave is None:
-                    continue
-
-                claves_grupo.add(clave)
-                if clave not in nombres_por_clave:
-                    nombres_por_clave[clave] = item.get("nombre", "Curso sin nombre")
-
-            claves_por_grupo.append(claves_grupo)
-
-        if not claves_por_grupo:
-            return []
-
-        # SOLO cursos presentes en todos los grupos base.
-        claves_comunes = set.intersection(*claves_por_grupo)
-
-        return [
-            {
-                "nombre": nombres_por_clave.get(clave, "Curso sin nombre"),
-                "solo_lectura": True,
-            }
-            for clave in claves_comunes
-        ]
 
     def _mostrar_estado_vacio_malla(self, parent, grupo):
         """Mostrar estado vacío en malla"""
@@ -666,3 +791,14 @@ class CursosView(ctk.CTkFrame):
             self.cargar_mallas()
         else:
             messagebox.showerror("Error", msg)
+
+    # ── Lifecycle ──
+    def on_show(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        pass

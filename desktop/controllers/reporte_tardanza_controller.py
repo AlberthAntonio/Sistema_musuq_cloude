@@ -11,9 +11,9 @@ class ReporteTardanzaController:
     """
     
     def __init__(self, auth_token: str = ""):
-        self.client = AsistenciaClient()
-        self.alumno_client = AlumnoClient()
-        self.reportes_client = ReportesClient()
+        self.client = AsistenciaClient(load_cached_session=False)
+        self.alumno_client = AlumnoClient(load_cached_session=False)
+        self.reportes_client = ReportesClient(load_cached_session=False)
         self.DEBUG = True
 
         for c in (self.client, self.alumno_client, self.reportes_client):

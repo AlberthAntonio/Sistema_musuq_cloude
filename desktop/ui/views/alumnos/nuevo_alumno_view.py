@@ -4,11 +4,15 @@ Sistema Musuq Cloud
 """
 
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import threading
+import io
+import importlib
+import os
 from typing import Dict, Optional, List
 from datetime import date, datetime
 from tkcalendar import DateEntry
+from PIL import Image
 
 from core.api_client import APIClient
 from core.theme_manager import ThemeManager as TM
@@ -25,16 +29,50 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         
         self.auth_client = auth_client
-        self.controller = AlumnoController(auth_client.token)
+        self._auth_token = auth_client.token
+        self.controller = None
         
         # Diccionarios de widgets
         self.entries: Dict[str, ctk.CTkEntry] = {}
         self.combos: Dict[str, ctk.CTkComboBox] = {}
         self.date_entries: Dict[str, DateEntry] = {}
         self.entry_deuda = None
+        self._ui_ready = False
+        self._loading_frame = None
+        self._foto_bytes: Optional[bytes] = None
+        self._foto_filename: Optional[str] = None
+        self._foto_mime_type: Optional[str] = None
         
-        self.create_widgets()
+        self._show_loading_state()
+        # Diferimos la construcción completa para evitar bloquear la primera pintura de la vista.
+        self.after(1, self._build_ui_deferred)
         #self._recargar_ultimos_registros()
+
+    def _show_loading_state(self):
+        """Placeholder liviano mientras se construye el formulario completo."""
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.pack(fill="both", expand=True)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando formulario de matrícula...",
+            font=ctk.CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye la UI pesada después del primer render."""
+        if self._ui_ready:
+            return
+
+        if self.controller is None:
+            self.controller = AlumnoController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+
+        self.create_widgets()
+        self._ui_ready = True
     
     def create_widgets(self):
         """Crear widgets del formulario"""
@@ -169,6 +207,11 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         # Componentes UI Refactorizados
         self.preview_card = StudentPreviewCard(preview_container)
         self.preview_card.pack(fill="x", pady=(0, 15))
+        self.preview_card.set_photo_actions(
+            on_pick_photo=self.seleccionar_foto_archivo,
+            on_capture_photo=self.capturar_foto_camara,
+            on_clear_photo=lambda: self.quitar_foto(pedir_confirmacion=True),
+        )
         
         self.audit_panel = AuditPanel(preview_container)
         self.audit_panel.pack(fill="x", pady=(0, 15))
@@ -182,7 +225,8 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
     # ==================== GRID LAYOUT HELPERS ====================
     
     def crear_campo_grid(self, parent, key: str, label: str, row: int, col: int, colspan: int = 1, 
-                         solo_numeros: bool = False, max_char: int = None, mayusculas: bool = False, on_change=None):
+                         solo_numeros: bool = False, max_char: int = None, mayusculas: bool = False,
+                         on_change=None, allow_decimal: bool = False):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.grid(row=row, column=col, columnspan=colspan, padx=10, pady=5, sticky="ew")
         
@@ -195,8 +239,8 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         entry.pack(fill="x", pady=(2, 0))
         
         # Validaciones
-        if solo_numeros or max_char:
-            vcmd = (self.register(lambda t: self.validar_input(t, solo_numeros, max_char)), '%P')
+        if solo_numeros or max_char or allow_decimal:
+            vcmd = (self.register(lambda t: self.validar_input(t, solo_numeros, max_char, allow_decimal)), '%P')
             entry.configure(validate="key", validatecommand=vcmd)
         
         if mayusculas:
@@ -306,8 +350,8 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         self.crear_campo_grid(parent, "descripcion", "Descripción", row=3, col=0, colspan=2)
     
     def crear_campos_pago(self, parent):
-        self.crear_campo_grid(parent, "costo", "Costo Total", row=0, col=0, solo_numeros=True, on_change=self.calcular_deuda)
-        self.crear_campo_grid(parent, "a_cuenta", "A Cuenta", row=0, col=1, solo_numeros=True, on_change=self.calcular_deuda)
+        self.crear_campo_grid(parent, "costo", "Costo Total", row=0, col=0, on_change=self.calcular_deuda, allow_decimal=True)
+        self.crear_campo_grid(parent, "a_cuenta", "A Cuenta", row=0, col=1, on_change=self.calcular_deuda, allow_decimal=True)
         
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
@@ -322,6 +366,136 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         self.crear_fecha_grid(parent, "fecha_cancelacion", "Fecha Cancelación", row=1, col=1)
 
     # ==================== LÓGICA DE CONTROLADOR ====================
+
+    def _infer_mime_type(self, filename: str) -> str:
+        ext = os.path.splitext(filename.lower())[1]
+        if ext in (".png",):
+            return "image/png"
+        if ext in (".webp",):
+            return "image/webp"
+        return "image/jpeg"
+
+    def _set_foto_desde_imagen(self, image: Image.Image, suggested_name: str, preferred_mime: Optional[str] = None):
+        """Normaliza imagen para guardar en BD y refresca la vista previa."""
+        max_bytes = 2 * 1024 * 1024
+        target_sizes = [(900, 900), (700, 700), (560, 560)]
+        qualities = (90, 82, 72)
+
+        payload = None
+        preview_image = None
+        for target_size in target_sizes:
+            candidate = image.copy().convert("RGB")
+            candidate.thumbnail(target_size, Image.Resampling.LANCZOS)
+
+            for quality in qualities:
+                buffer = io.BytesIO()
+                candidate.save(buffer, format="JPEG", quality=quality, optimize=True)
+                data = buffer.getvalue()
+                if len(data) <= max_bytes:
+                    payload = data
+                    preview_image = candidate
+                    break
+
+            if payload:
+                break
+
+        if not payload or preview_image is None:
+            messagebox.showwarning(
+                "Imagen muy grande",
+                "No se pudo optimizar la foto por debajo de 2MB. Use una imagen más ligera.",
+            )
+            return
+
+        base_name = os.path.splitext(suggested_name or "foto_alumno")[0]
+        self._foto_bytes = payload
+        self._foto_filename = f"{base_name}.jpg"
+        self._foto_mime_type = "image/jpeg"
+        self.preview_card.set_photo_image(preview_image)
+
+    def seleccionar_foto_archivo(self):
+        filepath = filedialog.askopenfilename(
+            title="Seleccionar foto del alumno",
+            filetypes=[
+                ("Imagenes", "*.png *.jpg *.jpeg *.webp"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("WEBP", "*.webp"),
+            ],
+        )
+        if not filepath:
+            return
+
+        try:
+            with Image.open(filepath) as img:
+                loaded = img.copy()
+            self._set_foto_desde_imagen(
+                image=loaded,
+                suggested_name=os.path.basename(filepath),
+                preferred_mime=self._infer_mime_type(filepath),
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo cargar la foto seleccionada:\n{e}")
+
+    def capturar_foto_camara(self):
+        try:
+            cv2 = importlib.import_module("cv2")
+        except Exception:
+            messagebox.showwarning(
+                "Camara no disponible",
+                "No se encontro OpenCV. Instale opencv-python para habilitar captura desde camara.",
+            )
+            return
+
+        messagebox.showinfo(
+            "Captura de foto",
+            "Se abrira la camara. Presione ESPACIO o ENTER para capturar, y ESC para cancelar.",
+        )
+
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(0)
+
+        if not cap.isOpened():
+            messagebox.showerror("Camara", "No se pudo acceder a ninguna camara conectada")
+            return
+
+        captured_image = None
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                cv2.imshow("Captura de foto - Alumno", frame)
+                key = cv2.waitKey(1) & 0xFF
+
+                if key in (13, 32):
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    captured_image = Image.fromarray(rgb)
+                    break
+                if key == 27:
+                    break
+        finally:
+            cap.release()
+            cv2.destroyAllWindows()
+
+        if captured_image is None:
+            return
+
+        self._set_foto_desde_imagen(
+            image=captured_image,
+            suggested_name=f"camara_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg",
+            preferred_mime="image/jpeg",
+        )
+
+    def quitar_foto(self, pedir_confirmacion: bool = False):
+        if pedir_confirmacion and self._foto_bytes:
+            if not messagebox.askyesno("Quitar foto", "Desea eliminar la foto seleccionada?"):
+                return
+
+        self._foto_bytes = None
+        self._foto_filename = None
+        self._foto_mime_type = None
+        self.preview_card.clear_photo()
 
     def on_grupo_change(self, seleccion=None):
         grupo = self.combos["grupo"].get()
@@ -403,9 +577,21 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         except:
             pass
 
-    def validar_input(self, texto: str, solo_numeros: bool, max_char: int) -> bool:
-        if max_char and len(texto) > max_char: return False
-        if solo_numeros and texto and not texto.isdigit(): return False
+    def validar_input(self, texto: str, solo_numeros: bool, max_char: int, allow_decimal: bool = False) -> bool:
+        if max_char and len(texto) > max_char:
+            return False
+
+        if allow_decimal:
+            if not texto:
+                return True
+            if texto.count(".") > 1:
+                return False
+            if not texto.replace(".", "", 1).isdigit():
+                return False
+            return True
+
+        if solo_numeros and texto and not texto.isdigit():
+            return False
         return True
     
     def forzar_mayusculas(self, entry):
@@ -424,6 +610,15 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
                 fecha_obj = self.date_entries["fecha_nacimiento"].get_date()
                 fecha_nac = fecha_obj.isoformat()
             except: pass
+
+        # Fecha de cancelación esperada para el saldo restante
+        fecha_cancelacion = None
+        if "fecha_cancelacion" in self.date_entries:
+            try:
+                fecha_obj = self.date_entries["fecha_cancelacion"].get_date()
+                fecha_cancelacion = fecha_obj.isoformat()
+            except:
+                pass
 
         padre_n = self.entries["padre_nombres"].get().strip()
         padre_p = self.entries["padre_ape_pat"].get().strip()
@@ -447,6 +642,11 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
             "celular_padre_2": self.entries["celular2"].get().strip() or None,
             "descripcion": self.entries["descripcion"].get().strip() or None,
             "costo_matricula": float(self.entries["costo"].get() or 0),
+            "a_cuenta": float(self.entries["a_cuenta"].get() or 0),
+            "fecha_cancelacion": fecha_cancelacion,
+            "foto_bytes": self._foto_bytes,
+            "foto_filename": self._foto_filename,
+            "foto_mime_type": self._foto_mime_type,
         }
         
         # Limpiar "--Seleccione"
@@ -468,6 +668,9 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
             self.combos[key].configure(border_color=TM.danger())
 
     def guardar_alumno(self):
+        if not self._ui_ready:
+            return
+
         datos = self.obtener_datos()
         
         # Delegar validación al controlador
@@ -493,7 +696,14 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         
         if success:
             self.lbl_status.configure(text="✅ Registrado", text_color="#10b981")
-            messagebox.showinfo("Éxito", "Matrícula registrada correctamente")
+            advertencia = result.get("_advertencia") if isinstance(result, dict) else None
+            if advertencia:
+                messagebox.showwarning(
+                    "Registro con advertencias",
+                    f"Matrícula registrada, pero se detectaron observaciones:\n\n{advertencia}"
+                )
+            else:
+                messagebox.showinfo("Éxito", "Matrícula registrada correctamente")
             self.limpiar_formulario()
             #self._recargar_ultimos_registros()
         else:
@@ -501,6 +711,9 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
             messagebox.showerror("Error", result.get("error", "Error desconocido"))
 
     def limpiar_formulario(self):
+        if not self._ui_ready:
+            return
+
         self.limpiar_errores()
         
         for entry in self.entries.values():
@@ -527,6 +740,7 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
         self.combos["grado"].set("--Seleccione")
 
         # Resetear componentes
+        self.quitar_foto(pedir_confirmacion=False)
         self.preview_card.reset()
         self.audit_panel.reset()
         self.financial_ticket.reset()
@@ -554,5 +768,9 @@ class NuevoAlumnoPanel(ctk.CTkFrame):
                          font=ctk.CTkFont(size=11), text_color=TM.text_secondary()).pack(side="right")
     
     def refresh(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+            return
+
         self.limpiar_formulario()
         #self._recargar_ultimos_registros()

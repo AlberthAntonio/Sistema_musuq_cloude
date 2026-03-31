@@ -19,6 +19,9 @@ from core.theme_manager import ThemeManager as TM
 from mixins.infinite_scroll_mixin import InfiniteScrollMixin
 from ui.dialogs.dialogo_alerta_turno import DialogoAlertaTurno
 from ui.dialogs.dialogo_inasistencias import DialogoInasistencias
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 # Intentar poner fechas en español
 try:
@@ -36,7 +39,6 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         super().__init__(parent, fg_color="transparent")
         self.controller = AsistenciaController(auth_client.token)
         self.audio = AudioHelper()
-        print("DEBUG: AsistenciaView INIT")
 
         # Variables de estado
         self.fila_seleccionada = None
@@ -46,10 +48,13 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         self.turno_actual_cache = self._obtener_turno_actual()
         self.filtro_turno_activo = True
         self._monitor_turno_after = None
+        self._turno_display_after = None
         self.primer_widget_fila = None
         self.cargando = False
         self.registros_cache = []
-        self._debounce_timer = None  # Timer para debounce
+        self._debounce_timer = None
+        self._is_visible = True  # Flag de visibilidad para ciclo de vida
+        self._pending_afters = []  # Track de after IDs pendientes
 
         # Anchos de columnas
         self.ANCHOS = [0, 100, 300, 80, 100, 100]
@@ -368,7 +373,7 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             ).pack(side="left", padx=2)
 
     def actualizar_reloj(self):
-        if not self.winfo_exists():
+        if not self.winfo_exists() or not self._is_visible:
             return
 
         now = datetime.now()
@@ -387,11 +392,11 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             return "⏸️ FUERA DE HORARIO"
 
     def actualizar_turno_display(self):
-        if not self.winfo_exists():
+        if not self.winfo_exists() or not self._is_visible:
             return
 
         self.lbl_turno_activo.configure(text=self._obtener_turno_actual())
-        self.after(60000, self.actualizar_turno_display)
+        self._turno_display_after = self.after(60000, self.actualizar_turno_display)
 
     def toggle_filtro_turno(self):
         self.filtro_turno_activo = self.switch_filtro.get()
@@ -403,11 +408,10 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
     # ================= LÓGICA DE DATOS =================
 
     def cargar_tabla_thread(self):
-        print("[DEBUG] cargar_tabla_thread llamado")
+        logger.debug("cargar_tabla_thread llamado")
         self.lbl_loader.pack(side="right", padx=10)
         self.btn_limpiar.configure(state="disabled")
         self.limpiar_scroll()
-        print(f"[DEBUG] Scroll limpiado, widgets restantes: {len(self.scroll_tabla.winfo_children())}")
         threading.Thread(target=self._cargar_datos, daemon=True).start()
 
     def _cargar_datos(self):
@@ -426,12 +430,13 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             self.after(0, lambda: self._error_carga())
 
     def _inicializar_tabla(self, registros):
-        print(f"[DEBUG] _inicializar_tabla con {len(registros)} registros")
+        if not self.winfo_exists():
+            return
+        logger.debug(f"Inicializando tabla con {len(registros)} registros")
         self.lbl_loader.pack_forget()
         self.btn_limpiar.configure(state="normal")
 
         self.cargar_datos_scroll(registros)
-        print(f"[DEBUG] Datos cargados en scroll, cache tiene {len(self._cache_datos_scroll)} items")
 
         # Actualizar contador con lógica de color
         actual = len(registros)
@@ -494,7 +499,7 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             self.turno_actual_cache = turno_nuevo
             self.actualizar_turno_display()
 
-        if self.winfo_exists():
+        if self.winfo_exists() and self._is_visible:
             self._monitor_turno_after = self.after(60000, self._verificar_cambio_turno)
 
     def _calcular_total_esperado(self, turno):
@@ -810,12 +815,10 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
     def _ejecutar_busqueda_alumno(self):
         """Ejecuta la búsqueda real después del debounce"""
         texto = self.entry_busqueda.get().strip()
-        print(f"[DEBUG View] Búsqueda solicitada: '{texto}'")
 
         self._limpiar_resultados()
 
         if len(texto) < 2:
-            print(f"[DEBUG View] Texto insuficiente ({len(texto)} chars) -> Ocultar panel")
             self.wrapper_resultados.grid_forget()
             return
 
@@ -825,14 +828,14 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         threading.Thread(target=self._buscar_hilo, args=(texto,), daemon=True).start()
 
     def _buscar_hilo(self, texto):
-        print(f"[DEBUG View] Iniciando búsqueda en hilo para: '{texto}'")
         resultados = self.controller.buscar_alumnos_general(texto)
-        print(f"[DEBUG View] Búsqueda completada: {len(resultados)} resultados")
-        self.after(0, lambda: self._mostrar_resultados(resultados))
+        if self.winfo_exists():
+            self.after(0, lambda: self._mostrar_resultados(resultados))
 
     def _mostrar_resultados(self, resultados):
         """Mostrar resultados de búsqueda en la UI"""
-        print(f"[DEBUG View] _mostrar_resultados llamado con {len(resultados)} items")
+        if not self.winfo_exists():
+            return
 
         self._limpiar_resultados()
 
@@ -842,8 +845,6 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         if not resultados:
             self.lbl_busqueda_empty.pack(pady=10)
             return
-
-        print(f"[DEBUG View] Renderizando {len(resultados)} resultados")
 
         for i, res in enumerate(resultados[:10]):
             nombre_completo = res.get('nombre_completo', '')
@@ -887,7 +888,6 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
             info.pack(pady=5)
 
     def _seleccionar_busqueda(self, alumno):
-        print(f"[DEBUG] Seleccionado: {alumno.get('nombres')}")
         self.entry_codigo.delete(0, 'end')
         self.entry_codigo.insert(0, alumno.get("dni"))
         self.registrar_asistencia()
@@ -1009,20 +1009,18 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
 
     def _iniciar_carga_datos(self):
         """Carga cache de nombres PRIMERO, luego la tabla"""
-        print("[DEBUG] _iniciar_carga_datos: cargando cache...")
         self._cargar_cache_nombres()
-        print("[DEBUG] _iniciar_carga_datos: cache listo, cargando tabla...")
-        self.after(0, self.cargar_tabla_thread)
+        if self.winfo_exists():
+            self.after(0, self.cargar_tabla_thread)
 
     def _cargar_cache_nombres(self):
         """Helper para traer lista de alumnos y poder mostrar nombres"""
-        print("[DEBUG] _cargar_cache_nombres iniciando...")
         success, res = self.controller.alumno_client.obtener_todos(limit=2000)
 
         if success:
             items = res if isinstance(res, list) else res.get("items", [])
             self.controller.mapa_alumnos = {a['id']: a for a in items}
-            print(f"[DEBUG] Cache de nombres cargado: {len(self.controller.mapa_alumnos)} alumnos")
+            logger.debug(f"Cache de nombres cargado: {len(self.controller.mapa_alumnos)} alumnos")
 
     def _seleccionar_fila(self, event, row_widget, data):
         """Maneja la selección visual de una fila"""
@@ -1040,3 +1038,38 @@ class AsistenciaView(ctk.CTkFrame, InfiniteScrollMixin):
         row_widget.configure(fg_color="#34495e")
 
         self.btn_eliminar.configure(state="normal")
+
+    # ================= CICLO DE VIDA =================
+
+    def on_show(self):
+        """Llamado cuando la vista se hace visible (ciclo de vida)"""
+        self._is_visible = True
+        # Relanzar timers solo si estaban detenidos
+        if self._reloj_after is None:
+            self.actualizar_reloj()
+        if self._monitor_turno_after is None:
+            self._verificar_cambio_turno()
+        if self._turno_display_after is None:
+            self.actualizar_turno_display()
+
+    def on_hide(self):
+        """Llamado cuando la vista se oculta (ciclo de vida)"""
+        self._is_visible = False
+        self._cancel_all_timers()
+
+    def cleanup(self):
+        """Limpieza total al destruir la vista (logout)"""
+        self._is_visible = False
+        self._cancel_all_timers()
+
+    def _cancel_all_timers(self):
+        """Cancelar todos los timers/after pendientes"""
+        for timer_attr in ('_reloj_after', '_monitor_turno_after',
+                           '_turno_display_after', '_debounce_timer'):
+            timer_id = getattr(self, timer_attr, None)
+            if timer_id is not None:
+                try:
+                    self.after_cancel(timer_id)
+                except Exception:
+                    pass
+                setattr(self, timer_attr, None)

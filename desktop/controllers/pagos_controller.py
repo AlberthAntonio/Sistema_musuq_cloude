@@ -6,28 +6,29 @@ from typing import List, Dict, Tuple, Optional
 from datetime import date
 from core.api_client import (
     PagosClient, AlumnoClient,
-    MatriculasClient, ObligacionesClient, ReportesClient,
+    MatriculasClient, ObligacionesClient, ReportesClient, PeriodosClient,
 )
 
 
 class PagosController:
     """
     Controlador para el módulo de Pagos (Tesorería).
-    - obtener_estado_cuenta: datos personales de /alumnos/, financieros de /pagos/resumen/{matricula_id}
+    - obtener_estado_cuenta: datos personales de /alumnos/, financieros de /pagos/resumen/matricula/{matricula_id}
     - registrar_pago:        flujo Matrícula → Obligación → Pago
     - obtener_lista_deudores: usa endpoint consolidado /reportes/deudores
     """
 
     def __init__(self, auth_token: str):
-        self.pagos_client      = PagosClient()
-        self.alumno_client     = AlumnoClient()
-        self.matricula_client  = MatriculasClient()
-        self.obligacion_client = ObligacionesClient()
-        self.reportes_client   = ReportesClient()
+        self.pagos_client      = PagosClient(load_cached_session=False)
+        self.alumno_client     = AlumnoClient(load_cached_session=False)
+        self.matricula_client  = MatriculasClient(load_cached_session=False)
+        self.obligacion_client = ObligacionesClient(load_cached_session=False)
+        self.reportes_client   = ReportesClient(load_cached_session=False)
+        self.periodos_client   = PeriodosClient(load_cached_session=False)
 
         for client in (self.pagos_client, self.alumno_client,
                        self.matricula_client, self.obligacion_client,
-                       self.reportes_client):
+                   self.reportes_client, self.periodos_client):
             client.token = auth_token
 
     # ─────────────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ class PagosController:
         Retorna estado de cuenta completo:
         - Datos personales: GET /alumnos/{id}
         - Datos académicos: GET /matriculas/?alumno_id=X
-        - Financiero:       GET /pagos/resumen/{matricula_id}
+        - Financiero:       GET /pagos/resumen/matricula/{matricula_id}
         - Historial:        GET /pagos/?alumno_id=X
         """
         # 1. Datos personales
@@ -73,12 +74,12 @@ class PagosController:
         grupo        = matricula.get("grupo",   "--")          if mat_ok and matricula else "--"
         carrera      = matricula.get("carrera", "--")          if mat_ok and matricula else "--"
 
-        # 3. Resumen financiero via /pagos/resumen/{matricula_id}
+        # 3. Resumen financiero via /pagos/resumen/matricula/{matricula_id}
         costo_total = 0.0
         pagado      = 0.0
         deuda       = 0.0
         if matricula_id:
-            res_ok, resumen = self.pagos_client.obtener_por_alumno(matricula_id)
+            res_ok, resumen = self.pagos_client.obtener_por_matricula(matricula_id)
             if res_ok and resumen:
                 costo_total = float(resumen.get("total_obligaciones", 0))
                 pagado      = float(resumen.get("total_pagado", 0))
@@ -92,6 +93,7 @@ class PagosController:
 
         return {
             "id":              id_alumno,
+            "matricula_id":    matricula_id,
             "nombre_completo": nombre,
             "dni":             alumno.get("dni", ""),
             "codigo":          codigo,
@@ -103,25 +105,69 @@ class PagosController:
             "historial":       historial,
         }
 
+    def obtener_finanzas_historial(self, id_alumno: int, matricula_id: Optional[int] = None) -> Dict:
+        """
+        Retorna solo datos financieros e historial para refrescos rápidos de UI.
+        Evita pedir nuevamente datos personales del alumno cuando no cambiaron.
+        """
+        matricula_id_local = matricula_id
+        if not matricula_id_local:
+            mat_ok, matricula = self.matricula_client.obtener_activa_por_alumno(id_alumno)
+            if mat_ok and matricula:
+                matricula_id_local = matricula.get("id")
+
+        costo_total = 0.0
+        pagado = 0.0
+        deuda = 0.0
+        if matricula_id_local:
+            res_ok, resumen = self.pagos_client.obtener_por_matricula(matricula_id_local)
+            if res_ok and resumen:
+                costo_total = float(resumen.get("total_obligaciones", 0))
+                pagado = float(resumen.get("total_pagado", 0))
+                deuda = float(resumen.get("saldo_pendiente", 0))
+
+        historial = []
+        h_ok, h_data = self.pagos_client.listar_por_alumno(id_alumno)
+        if h_ok:
+            historial = h_data if isinstance(h_data, list) else h_data.get("items", [])
+
+        return {
+            "matricula_id": matricula_id_local,
+            "costo": costo_total,
+            "pagado": pagado,
+            "deuda": deuda,
+            "historial": historial,
+        }
+
     # ─────────────────────────────────────────────────────────────────
     # REGISTRO DE PAGO
     # ─────────────────────────────────────────────────────────────────
 
-    def registrar_pago(self, id_alumno: int, monto: float, concepto: str) -> Tuple[bool, str]:
+    def registrar_pago(
+        self,
+        id_alumno: int,
+        monto: float,
+        concepto: str,
+        matricula_id: Optional[int] = None,
+    ) -> Tuple[bool, str]:
         """
         Registra un pago.
         Flujo: Matrícula activa → primera Obligación pendiente/parcial → Pago.
         Si no existe obligación se crea una en el momento.
         """
-        # 1. Matrícula activa del alumno
-        mat_ok, matricula = self.matricula_client.obtener_activa_por_alumno(id_alumno)
-        if not mat_ok or not matricula:
-            return False, "El alumno no tiene matrícula activa para este periodo."
+        # 1. Matrícula activa del alumno (opcionalmente reutiliza matrícula ya resuelta por la UI)
+        matricula_id_local = matricula_id
+        if not matricula_id_local:
+            mat_ok, matricula = self.matricula_client.obtener_activa_por_alumno(id_alumno)
+            if not mat_ok or not matricula:
+                return False, "El alumno no tiene matrícula activa para este periodo."
+            matricula_id_local = matricula.get("id")
 
-        matricula_id = matricula.get("id")
+        if not matricula_id_local:
+            return False, "No se pudo resolver la matrícula activa del alumno."
 
         # 2. Primera obligación pendiente o parcial
-        obl_ok, obl_data = self.obligacion_client.listar(matricula_id=matricula_id, limit=50)
+        obl_ok, obl_data = self.obligacion_client.listar(matricula_id=matricula_id_local, limit=50)
         obligaciones = obl_data if isinstance(obl_data, list) else []
         obligacion_id = None
         for obl in obligaciones:
@@ -132,7 +178,7 @@ class PagosController:
         # 3. Si no hay obligación pendiente, crear una ad-hoc
         if not obligacion_id:
             nueva_obl = {
-                "matricula_id":      matricula_id,
+                "matricula_id":      matricula_id_local,
                 "concepto":          concepto or "Pago",
                 "monto_total":       monto,
                 "fecha_vencimiento": date.today().isoformat(),
@@ -160,7 +206,7 @@ class PagosController:
 
     def obtener_filtros_disponibles(self) -> Tuple[List[str], List[str]]:
         """Grupos y modalidades disponibles desde matrículas activas"""
-        success, result = self.matricula_client.listar(estado="activo", limit=1000)
+        success, result = self.matricula_client.listar(estado="activo", limit=200)
         grupos      = set()
         modalidades = set()
         if success:
@@ -182,10 +228,25 @@ class PagosController:
         Lista de deudores usando GET /reportes/deudores (una sola consulta SQL).
         Reemplaza el loop N×requests anterior.
         """
+        # Normalizar placeholders de UI.
+        grupo_norm = None if grupo in (None, "", "Todos", "Todas") else grupo
+        modalidad_norm = None if modalidad in (None, "", "Todos", "Todas") else modalidad
+
+        # Si no hay filtros específicos, usar periodo activo para cumplir
+        # la regla de backend de consultas no amplias.
+        if periodo_id is None and grupo_norm is None and modalidad_norm is None:
+            ok_periodo, data_periodo = self.periodos_client.obtener_activo()
+            if ok_periodo and isinstance(data_periodo, dict):
+                periodo_id = data_periodo.get("id")
+            else:
+                ok_lista, data_lista = self.periodos_client.listar()
+                if ok_lista and isinstance(data_lista, list) and data_lista:
+                    periodo_id = data_lista[0].get("id")
+
         success, result = self.reportes_client.deudores(
             periodo_id=periodo_id,
-            grupo=grupo,
-            modalidad=modalidad,
+            grupo=grupo_norm,
+            modalidad=modalidad_norm,
         )
         if not success:
             print(f"[ERROR PagosController] deudores: {result.get('error', '')}")
@@ -198,6 +259,14 @@ class PagosController:
             pagado = float(item.get("total_pagado", 0))
             deuda  = float(item.get("saldo_pendiente", 0))
 
+            # Compatibilidad de claves: backend actual usa "nombre_completo".
+            nombre = (
+                item.get("alumno_nombre")
+                or item.get("nombre_completo")
+                or item.get("nombre")
+                or "SIN NOMBRE"
+            )
+
             if deuda <= 0.5:
                 continue
 
@@ -207,7 +276,7 @@ class PagosController:
             registros.append({
                 "id":          item.get("alumno_id"),
                 "icono":       icono,
-                "nombre":      item.get("alumno_nombre", ""),
+                "nombre":      nombre,
                 "modalidad":   item.get("modalidad")  or "Sin Modalidad",
                 "contacto":    item.get("contacto")   or "-",
                 "costo":       costo,

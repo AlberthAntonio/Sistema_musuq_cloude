@@ -2,13 +2,29 @@ import os
 import io
 from typing import List, Dict, Tuple
 from datetime import datetime
-from reportlab.lib.pagesizes import landscape
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader
-import barcode
-from barcode.writer import ImageWriter
-import qrcode
+
+try:
+    from reportlab.lib.pagesizes import landscape
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
+    HAS_REPORTLAB = True
+except ImportError:
+    mm = 1.0
+    HAS_REPORTLAB = False
+
+try:
+    import barcode
+    from barcode.writer import ImageWriter
+except ImportError:
+    barcode = None
+    ImageWriter = None
+
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
+
 from PIL import Image
 
 from core.api_client import AlumnoClient
@@ -74,6 +90,9 @@ class CarnetController:
 
     def generar_carnets_pdf(self, ids_alumnos: List[int]) -> Tuple[bool, str]:
         """Genera un archivo PDF con los carnets seleccionados (Anverso y Reverso)"""
+        if not HAS_REPORTLAB:
+            return False, "Falta la dependencia 'reportlab'. Instale con: pip install reportlab"
+
         if not ids_alumnos:
             return False, "No hay alumnos seleccionados"
 
@@ -244,6 +263,9 @@ class CarnetController:
         c.drawCentredString(x + CARD_WIDTH/2, y + 12*mm, "Dirección Académica")
 
     def _dibujar_qr(self, c, x, y, data, size=20*mm):
+        if qrcode is None:
+            return
+
         try:
             qr = qrcode.QRCode(box_size=1, border=0)
             qr.add_data(data)

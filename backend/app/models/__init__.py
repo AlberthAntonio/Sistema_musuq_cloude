@@ -11,6 +11,7 @@ from app.models.docente import Docente
 from app.models.docente_curso import DocenteCurso
 from app.models.evento import EventoCalendario
 from app.models.horario import Horario
+from app.models.plantilla_horario import PlantillaHorario, PlantillaBloque
 from app.models.lista import ListaGuardada, lista_items
 from app.models.sesion import SesionExamen
 from app.models.nota import Nota
@@ -32,6 +33,8 @@ __all__ = [
     "DocenteCurso",
     "EventoCalendario",
     "Horario",
+    "PlantillaHorario",
+    "PlantillaBloque",
     "ListaGuardada",
     "lista_items",
     "SesionExamen",

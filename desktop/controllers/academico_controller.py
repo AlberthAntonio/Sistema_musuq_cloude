@@ -1,5 +1,12 @@
 from typing import List, Dict, Any, Tuple, Optional
-from core.api_client import CursosClient, HorariosClient, SesionesClient, AlumnoClient, NotasClient
+from core.api_client import (
+    CursosClient,
+    HorariosClient,
+    PlantillasHorarioClient,
+    SesionesClient,
+    AlumnoClient,
+    NotasClient,
+)
 import random
 
 class AcademicoController:
@@ -9,14 +16,16 @@ class AcademicoController:
     """
     
     def __init__(self, auth_token: str):
-        self.cursos_client = CursosClient()
-        self.horarios_client = HorariosClient()
-        self.sesiones_client = SesionesClient()
-        self.alumno_client = AlumnoClient()
-        self.notas_client = NotasClient()
+        self.cursos_client = CursosClient(load_cached_session=False)
+        self.horarios_client = HorariosClient(load_cached_session=False)
+        self.plantillas_client = PlantillasHorarioClient(load_cached_session=False)
+        self.sesiones_client = SesionesClient(load_cached_session=False)
+        self.alumno_client = AlumnoClient(load_cached_session=False)
+        self.notas_client = NotasClient(load_cached_session=False)
         
         self.cursos_client.token = auth_token
         self.horarios_client.token = auth_token
+        self.plantillas_client.token = auth_token
         self.sesiones_client.token = auth_token
         self.alumno_client.token = auth_token
         self.notas_client.token = auth_token
@@ -143,46 +152,183 @@ class AcademicoController:
         Obtiene los horarios de un aula específica (GET /aulas/{id}/horarios)
         y los filtra por grupo, organizados por día.
         """
-        success, result = self.horarios_client.obtener_por_aula(aula_id, periodo or None)
-
+        success, msg, bloques = self.obtener_bloques_horario_aula(
+            aula_id=aula_id,
+            grupo=grupo,
+            periodo=periodo,
+        )
         if not success:
-            return False, "No se pudo obtener el horario del aula", {}
-
-        horarios = result if isinstance(result, list) else result.get("items", [])
-
-        # Filtrar por grupo activo
-        if grupo:
-            horarios = [h for h in horarios if h.get("grupo", "") == grupo]
-
-        def _hm(t: str) -> str:
-            """Normaliza '08:00:00' → '08:00', tolerante con formatos cortos."""
-            if not t:
-                return t
-            parts = t.split(":")
-            return f"{parts[0]}:{parts[1]}" if len(parts) >= 2 else t
+            return False, msg, {}
 
         horario_por_dia: Dict = {}
-        for h in horarios:
-            dia  = h.get("dia_semana", h.get("dia", 1))
-            hi   = _hm(h.get("hora_inicio", ""))
-            hf   = _hm(h.get("hora_fin", ""))
+        for h in bloques:
+            if h.get("tipo_bloque") != "CLASE":
+                continue
+            if not h.get("id") and not h.get("curso_id") and not h.get("curso_nombre"):
+                continue
+
+            dia = h.get("dia_semana", 1)
+            hi = h.get("hora_inicio", "")
+            hf = h.get("hora_fin", "")
             slot = f"{hi}-{hf}"
 
             if dia not in horario_por_dia:
                 horario_por_dia[dia] = {}
 
             horario_por_dia[dia][slot] = {
-                "id":             h.get("id"),
-                "nombre_curso":   h.get("curso_nombre", h.get("curso", "")),
+                "id": h.get("id"),
+                "nombre_curso": h.get("curso_nombre", h.get("curso", "")),
                 "nombre_docente": h.get("docente_nombre", h.get("docente", "")),
-                "aula":           h.get("aula", ""),
-                "grupo":          h.get("grupo", grupo),
-                "dia":            dia,
-                "hora_inicio":    hi,
-                "hora_fin":       hf,
+                "aula": h.get("aula", ""),
+                "grupo": h.get("grupo", grupo),
+                "dia": dia,
+                "hora_inicio": hi,
+                "hora_fin": hf,
             }
 
         return True, "Horario obtenido", horario_por_dia
+
+    def _hm(self, t: str) -> str:
+        """Normaliza '08:00:00' -> '08:00', tolerante con formatos cortos."""
+        if not t:
+            return t
+        parts = t.split(":")
+        return f"{parts[0]}:{parts[1]}" if len(parts) >= 2 else t
+
+    def obtener_bloques_horario_aula(
+        self,
+        aula_id: int,
+        grupo: str,
+        periodo: str = "",
+        turno: Optional[str] = None,
+    ) -> Tuple[bool, str, List[Dict[str, Any]]]:
+        """Obtiene bloques reales (CLASE/RECREO/LIBRE) para render dinámico."""
+        success, result = self.horarios_client.obtener_por_aula(
+            aula_id,
+            periodo or None,
+            grupo=grupo or None,
+            turno=turno or None,
+        )
+        if not success:
+            return False, "No se pudo obtener el horario del aula", []
+
+        items = result if isinstance(result, list) else result.get("items", [])
+
+        bloques: List[Dict[str, Any]] = []
+        for h in items:
+            dia = h.get("dia_semana", h.get("dia", 1))
+            hi = self._hm(h.get("hora_inicio", ""))
+            hf = self._hm(h.get("hora_fin", ""))
+            tipo = (h.get("tipo_bloque") or "CLASE").upper()
+            if tipo not in {"CLASE", "RECREO", "LIBRE"}:
+                tipo = "CLASE"
+
+            bloques.append(
+                {
+                    "id": h.get("id"),  # id de horario (si existe asignación)
+                    "plantilla_bloque_id": h.get("plantilla_bloque_id"),
+                    "dia_semana": dia,
+                    "hora_inicio": hi,
+                    "hora_fin": hf,
+                    "tipo_bloque": tipo,
+                    "etiqueta": h.get("etiqueta") or "",
+                    "curso_id": h.get("curso_id"),
+                    "curso_nombre": h.get("curso_nombre", h.get("curso", "")),
+                    "docente_id": h.get("docente_id"),
+                    "docente_nombre": h.get("docente_nombre", h.get("docente", "")),
+                    "aula": h.get("aula", ""),
+                    "grupo": h.get("grupo", grupo),
+                    "periodo": h.get("periodo", periodo or ""),
+                    "turno": h.get("turno", turno),
+                }
+            )
+
+        bloques.sort(key=lambda x: (x.get("dia_semana", 0), x.get("hora_inicio", "")))
+        return True, "Horario obtenido", bloques
+
+    def _asegurar_plantilla(
+        self,
+        aula_id: int,
+        grupo: str,
+        periodo: str,
+        turno: str,
+    ) -> Tuple[bool, str, Optional[int]]:
+        """Garantiza existencia de plantilla activa para el alcance solicitado."""
+        ok_list, result_list = self.plantillas_client.listar_plantillas(
+            aula_id=aula_id,
+            grupo=grupo,
+            periodo=periodo,
+            turno=turno,
+            activo=True,
+        )
+        if not ok_list:
+            error = result_list.get("detail") or result_list.get("error", "Error al listar plantillas")
+            return False, str(error), None
+
+        plantillas = result_list if isinstance(result_list, list) else result_list.get("items", [])
+        if plantillas:
+            return True, "Plantilla encontrada", plantillas[0].get("id")
+
+        ok_create, result_create = self.plantillas_client.crear_plantilla(
+            {
+                "aula_id": aula_id,
+                "grupo": grupo,
+                "periodo": periodo,
+                "turno": turno,
+                "version": 1,
+                "activo": True,
+            }
+        )
+        if not ok_create:
+            error = result_create.get("detail") or result_create.get("error", "Error al crear plantilla")
+            return False, str(error), None
+
+        return True, "Plantilla creada", result_create.get("id")
+
+    def crear_bloque_plantilla_personalizado(
+        self,
+        aula_id: int,
+        grupo: str,
+        periodo: str,
+        turno: str,
+        dia_semana: int,
+        hora_inicio: str,
+        hora_fin: str,
+        tipo_bloque: str,
+        etiqueta: Optional[str] = None,
+    ) -> Tuple[bool, str, Optional[int]]:
+        """Crea un bloque personalizado en la plantilla activa del aula/grupo."""
+        ok_tpl, msg_tpl, plantilla_id = self._asegurar_plantilla(
+            aula_id=aula_id,
+            grupo=grupo,
+            periodo=periodo,
+            turno=turno,
+        )
+        if not ok_tpl or plantilla_id is None:
+            return False, msg_tpl, None
+
+        payload = {
+            "dia_semana": dia_semana,
+            "hora_inicio": hora_inicio,
+            "hora_fin": hora_fin,
+            "tipo_bloque": tipo_bloque,
+            "etiqueta": etiqueta or None,
+            "activo": True,
+        }
+        ok_block, result_block = self.plantillas_client.crear_bloque(plantilla_id, payload)
+        if not ok_block:
+            error = result_block.get("detail") or result_block.get("error", "Error al crear bloque")
+            return False, str(error), None
+
+        return True, "Bloque creado correctamente", result_block.get("id")
+
+    def eliminar_bloque_plantilla(self, bloque_id: int) -> Tuple[bool, str]:
+        """Elimina bloque de plantilla (RECREO/LIBRE/CLASE no asignado)."""
+        success, result = self.plantillas_client.eliminar_bloque(bloque_id)
+        if success:
+            return True, "Bloque de plantilla eliminado"
+        error = result.get("detail") or result.get("error", "Error al eliminar bloque de plantilla")
+        return False, str(error)
 
     def agregar_bloque_horario(self, grupo: str, dia: int, hora_inicio: str,
                                hora_fin: str, curso_id: int, docente_id: int,
@@ -210,6 +356,7 @@ class AcademicoController:
         aula_id: Optional[int] = None,
         turno: Optional[str] = None,
         periodo: str = "2026-I",
+        plantilla_bloque_id: Optional[int] = None,
     ) -> Tuple[bool, str, Optional[int]]:
         """Crear un bloque horario en el backend (POST /horarios/)"""
         data: Dict = {
@@ -228,6 +375,8 @@ class AcademicoController:
             data["aula_id"] = aula_id
         if turno:
             data["turno"] = turno
+        if plantilla_bloque_id is not None:
+            data["plantilla_bloque_id"] = plantilla_bloque_id
 
         success, result = self.horarios_client.crear(data)
         if success:

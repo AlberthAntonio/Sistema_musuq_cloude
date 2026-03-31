@@ -42,6 +42,22 @@ class Settings(BaseSettings):
     
     # Rate limiting (intentos de login por IP por minuto)
     LOGIN_RATE_LIMIT: int = 10
+
+    # Rendimiento API
+    DEFAULT_PAGE_SIZE: int = 50
+    MAX_PAGE_SIZE: int = 200
+    STRICT_HEAVY_QUERY_FILTERS: bool = True
+
+    # Pool de conexiones (para PostgreSQL)
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 300
+
+    # Rollout Horarios (Fase 7)
+    HORARIOS_PLANTILLAS_ENABLED: bool = True
+    # "*" habilita todas las aulas; lista CSV habilita canary por aula_id.
+    HORARIOS_PLANTILLAS_ALLOW_AULAS: str = "*"
     
     @property
     def db_url(self) -> str:
@@ -56,6 +72,24 @@ class Settings(BaseSettings):
         if self.ALLOWED_ORIGINS == "*":
             return ["*"]
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+
+    @property
+    def horarios_plantillas_allow_aulas_set(self) -> Optional[set[int]]:
+        """Retorna None si aplica a todas las aulas, o set de aula_id permitidas."""
+        raw = (self.HORARIOS_PLANTILLAS_ALLOW_AULAS or "").strip()
+        if not raw or raw == "*":
+            return None
+
+        values: set[int] = set()
+        for part in raw.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            try:
+                values.add(int(item))
+            except ValueError:
+                continue
+        return values
     
     class Config:
         env_file = ".env"

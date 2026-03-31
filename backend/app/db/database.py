@@ -1,5 +1,6 @@
 """
 Configuración de base de datos con SQLAlchemy.
+Pool de conexiones optimizado según entorno.
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -7,15 +8,25 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
 
 # Crear engine según configuración
-# echo activo solo en DEBUG para no contaminar logs de producción
-engine = create_engine(
-    settings.db_url,
-    echo= False,
-    pool_pre_ping=True,   # Verifica conexión antes de usarla (evita broken pipe)
-    pool_recycle=300,     # Recicla conexiones cada 5 minutos
-    # Para SQLite necesitamos check_same_thread=False
-    connect_args={"check_same_thread": False} if settings.USE_SQLITE else {}
-)
+# SQLite: config simple (no soporta pool real)
+# PostgreSQL: pool completo con pre_ping, overflow, timeouts
+if settings.USE_SQLITE:
+    engine = create_engine(
+        settings.db_url,
+        echo=False,
+        pool_pre_ping=True,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    engine = create_engine(
+        settings.db_url,
+        echo=False,
+        pool_pre_ping=True,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_timeout=settings.DB_POOL_TIMEOUT,
+        pool_recycle=settings.DB_POOL_RECYCLE,
+    )
 
 # Sesión de base de datos
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -45,7 +56,8 @@ def init_db():
     from app.models import (
         Usuario, Alumno, Asistencia, Curso, MallaCurricular,
         Aula, AulaGrupo, AulaCurso,
-        Docente, DocenteCurso, Horario, EventoCalendario, ListaGuardada,
+        Docente, DocenteCurso, Horario, PlantillaHorario, PlantillaBloque,
+        EventoCalendario, ListaGuardada,
         SesionExamen, Nota,
         PeriodoAcademico, Matricula, ObligacionPago, Pago
     )

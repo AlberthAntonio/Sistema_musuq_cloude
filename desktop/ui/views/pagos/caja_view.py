@@ -7,10 +7,14 @@ Gestión de pagos, cobros y estado de cuenta de alumnos
 import customtkinter as ctk
 from tkinter import messagebox
 from customtkinter import CTkFont
+import threading
 
 from controllers.pagos_controller import PagosController
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class CajaView(ctk.CTkFrame):
@@ -26,13 +30,47 @@ class CajaView(ctk.CTkFrame):
             raise ValueError("auth_client es requerido para inicializar CajaView")
 
         self.auth_client = auth_client
-        self.controller = PagosController(auth_client.token)
+        self._auth_token = auth_client.token
+        self.controller = None
         self.alumno_seleccionado_id = None
+        self.matricula_id_cache = None
         self.deuda_actual_cache = 0.0
-        self._debounce_timer = None  # Timer para debounce
+        self._debounce_timer = None
+        self._request_id = 0  # Contador monótono para descartar respuestas viejas
+        self._ui_ready = False
+        self._loading_frame = None
+
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder de carga inicial para minimizar bloqueo del primer render."""
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando modulo de tesoreria...",
+            font=CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye UI y arranca búsqueda inicial fuera del constructor."""
+        if self._ui_ready:
+            return
+
+        if self.controller is None:
+            self.controller = PagosController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
 
         self.crear_ui()
         self.buscar()
+        self._ui_ready = True
 
     # ... (skipping to buscar method) ...
 
@@ -518,20 +556,42 @@ class CajaView(ctk.CTkFrame):
         self._debounce_timer = self.after(500, self._ejecutar_busqueda)
 
     def _ejecutar_busqueda(self):
-        """Ejecuta la búsqueda real"""
+        """Ejecuta la búsqueda en background thread"""
         criterio = self.entry_busqueda.get()
+        self._request_id += 1
+        req_id = self._request_id
 
-        # Limpiar resultados
+        # Limpiar resultados y mostrar loading
         for widget in self.scroll_resultados.winfo_children():
             widget.destroy()
 
-        resultados = self.controller.buscar_alumno(criterio)
+        lbl_loading = ctk.CTkLabel(
+            self.scroll_resultados,
+            text="⏳ Buscando...",
+            font=CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        )
+        lbl_loading.pack(pady=20)
+
+        def _hilo():
+            resultados = self.controller.buscar_alumno(criterio)
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._mostrar_resultados_busqueda(resultados))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _mostrar_resultados_busqueda(self, resultados):
+        """Actualizar UI con resultados de búsqueda (hilo principal)"""
+        if not self.winfo_exists():
+            return
+
+        for widget in self.scroll_resultados.winfo_children():
+            widget.destroy()
 
         if not resultados:
             self._mostrar_sin_resultados()
             return
 
-        # Mostrar resultados
         for alu in resultados:
             self._crear_item_resultado(alu)
 
@@ -603,16 +663,36 @@ class CajaView(ctk.CTkFrame):
     def seleccionar_alumno(self, id_alumno):
         """Seleccionar un alumno y cargar sus datos"""
         self.alumno_seleccionado_id = id_alumno
+        self.matricula_id_cache = None
         self.btn_pagar.configure(state="normal")
         self.btn_cobrar_todo.configure(state="normal")
         self.actualizar_estado_cuenta()
 
     def actualizar_estado_cuenta(self):
-        """Actualizar UI con estado de cuenta del alumno"""
-        datos = self.controller.obtener_estado_cuenta(self.alumno_seleccionado_id)
-        if not datos:
+        """Actualizar UI con estado de cuenta del alumno (background thread)"""
+        self._request_id += 1
+        req_id = self._request_id
+        alumno_id = self.alumno_seleccionado_id
+
+        # Mostrar loading en KPIs
+        self.var_nombre.set("⏳ Cargando...")
+        self.card_costo.configure(text="...")
+        self.card_pagado.configure(text="...")
+        self.card_deuda.configure(text="...")
+
+        def _hilo():
+            datos = self.controller.obtener_estado_cuenta(alumno_id)
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._aplicar_estado_cuenta(datos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_estado_cuenta(self, datos):
+        """Aplicar datos de estado de cuenta a la UI (hilo principal)"""
+        if not self.winfo_exists() or not datos:
             return
 
+        self.matricula_id_cache = datos.get("matricula_id")
         self.deuda_actual_cache = datos["deuda"]
 
         # 1. Datos alumno
@@ -694,7 +774,7 @@ class CajaView(ctk.CTkFrame):
         self.entry_concepto.insert(0, "Cancelación Total")
 
     def realizar_pago(self):
-        """Realizar registro de pago"""
+        """Realizar registro de pago en background thread"""
         try:
             monto_str = self.entry_monto.get()
             if not monto_str:
@@ -711,17 +791,89 @@ class CajaView(ctk.CTkFrame):
             if not messagebox.askyesno("Confirmar", f"¿Registrar pago de S/. {monto:.2f}?"):
                 return
 
-            exito, msg = self.controller.registrar_pago(
-                self.alumno_seleccionado_id, monto, concepto
-            )
+            # Deshabilitar botón mientras procesa
+            self.btn_pagar.configure(state="disabled", text="⏳ Procesando...")
+            alumno_id = self.alumno_seleccionado_id
 
-            if exito:
-                messagebox.showinfo("Éxito", msg)
-                self.entry_monto.delete(0, "end")
-                self.entry_concepto.delete(0, "end")
-                self.actualizar_estado_cuenta()
-            else:
-                messagebox.showerror("Error", msg)
+            def _hilo():
+                exito, msg = self.controller.registrar_pago(
+                    alumno_id,
+                    monto,
+                    concepto,
+                    matricula_id=self.matricula_id_cache,
+                )
+                if self.winfo_exists():
+                    self.after(0, lambda: self._post_pago(exito, msg))
+
+            threading.Thread(target=_hilo, daemon=True).start()
 
         except ValueError:
             messagebox.showerror("Error", "Monto inválido")
+
+    def _post_pago(self, exito, msg):
+        """Callback tras registrar pago (hilo principal)"""
+        if not self.winfo_exists():
+            return
+
+        self.btn_pagar.configure(state="normal", text="💵 COBRAR")
+
+        if exito:
+            messagebox.showinfo("Éxito", msg)
+            self.entry_monto.delete(0, "end")
+            self.entry_concepto.delete(0, "end")
+            self.actualizar_finanzas_post_pago()
+        else:
+            messagebox.showerror("Error", msg)
+
+    def actualizar_finanzas_post_pago(self):
+        """Refrescar solo finanzas e historial tras cobrar para evitar GET redundantes."""
+        self._request_id += 1
+        req_id = self._request_id
+        alumno_id = self.alumno_seleccionado_id
+        matricula_id = self.matricula_id_cache
+
+        self.card_costo.configure(text="...")
+        self.card_pagado.configure(text="...")
+        self.card_deuda.configure(text="...")
+
+        def _hilo():
+            datos = self.controller.obtener_finanzas_historial(
+                alumno_id,
+                matricula_id=matricula_id,
+            )
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._aplicar_finanzas_post_pago(datos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_finanzas_post_pago(self, datos):
+        """Aplicar solo datos financieros e historial sin recargar datos personales."""
+        if not self.winfo_exists() or not datos:
+            return
+
+        self.matricula_id_cache = datos.get("matricula_id") or self.matricula_id_cache
+        self.deuda_actual_cache = datos["deuda"]
+        self.card_costo.configure(text=f"S/. {datos['costo']:.2f}")
+        self.card_pagado.configure(text=f"S/. {datos['pagado']:.2f}")
+        self.card_deuda.configure(text=f"S/. {datos['deuda']:.2f}")
+        self._cargar_historial(datos["historial"])
+
+    # ================= CICLO DE VIDA =================
+
+    def on_show(self):
+        """Llamado cuando la vista se hace visible"""
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        """Llamado cuando la vista se oculta"""
+        if self._debounce_timer:
+            try:
+                self.after_cancel(self._debounce_timer)
+            except Exception:
+                pass
+            self._debounce_timer = None
+
+    def cleanup(self):
+        """Limpieza total al destruir (logout)"""
+        self.on_hide()

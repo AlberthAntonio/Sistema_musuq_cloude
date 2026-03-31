@@ -1,0 +1,49 @@
+{
+  "dry_run": true,
+  "total_horarios": 3,
+  "total_horarios_con_plantilla": 3,
+  "plantillas_creadas": 2,
+  "bloques_creados": 3,
+  "horarios_mapeados": 3,
+  "horarios_ya_mapeados": 0,
+  "horarios_no_mapeados": 0,
+  "no_mapeados": [],
+  "muestra_mapeados": [
+    {
+      "horario_id": 1,
+      "plantilla_id": 1,
+      "plantilla_bloque_id": 1,
+      "aula_id": 1,
+      "grupo": "A",
+      "periodo": "2026-I",
+      "turno": "MANANA",
+      "dia_semana": 1,
+      "hora_inicio": "08:00",
+      "hora_fin": "08:45"
+    },
+    {
+      "horario_id": 2,
+      "plantilla_id": 2,
+      "plantilla_bloque_id": 2,
+      "aula_id": 2,
+      "grupo": "B",
+      "periodo": "2026-I",
+      "turno": "MANANA",
+      "dia_semana": 1,
+      "hora_inicio": "08:45",
+      "hora_fin": "09:30"
+    },
+    {
+      "horario_id": 3,
+      "plantilla_id": 2,
+      "plantilla_bloque_id": 3,
+      "aula_id": 2,
+      "grupo": "B",
+      "periodo": "2026-I",
+      "turno": "MANANA",
+      "dia_semana": 1,
+      "hora_inicio": "08:00",
+      "hora_fin": "08:45"
+    }
+  ]
+}

@@ -7,9 +7,13 @@ Panel dual: Lista de aulas registradas + Formulario de creación / detalle
 import customtkinter as ctk
 from tkinter import messagebox
 from customtkinter import CTkFont
+import threading
 
 from core.theme_manager import ThemeManager as TM
 from controllers.aulas_controller import AulasController
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 MODALIDADES = [
     "COLEGIO",
@@ -55,7 +59,7 @@ class CrearAulasView(ctk.CTkFrame):
         self._crear_panel_izquierdo()
         self._crear_panel_derecho()
 
-        self.cargar_aulas()
+        self._cargar_aulas_async()
 
     # ═══════════════════════════════════════════════════════════
     #  PANEL IZQUIERDO – LISTA DE AULAS
@@ -655,20 +659,43 @@ class CrearAulasView(ctk.CTkFrame):
     #  RENDERIZADO DE LA LISTA
     # ═══════════════════════════════════════════════════════════
 
-    def cargar_aulas(self):
-        """Carga la lista completa de aulas desde la API (activas e inactivas)."""
-        activas   = self.controller.listar(activo=True)
-        inactivas = self.controller.listar(activo=False)
-        # Unimos y deduplicamos por ID
-        visto: set = set()
-        combinadas = []
-        for a in activas + inactivas:
-            if a["id"] not in visto:
-                visto.add(a["id"])
-                combinadas.append(a)
-        self.aulas = combinadas
+    def _cargar_aulas_async(self):
+        """Carga la lista de aulas en background."""
+        # Loading placeholder
+        for w in self.scroll_aulas.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self.scroll_aulas,
+            text="⏳ Cargando aulas...",
+            font=CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        ).pack(pady=20)
+
+        def _hilo():
+            activas = self.controller.listar(activo=True)
+            inactivas = self.controller.listar(activo=False)
+            # Deduplicar por ID
+            visto = set()
+            combinadas = []
+            for a in activas + inactivas:
+                if a["id"] not in visto:
+                    visto.add(a["id"])
+                    combinadas.append(a)
+            if self.winfo_exists():
+                self.after(0, lambda: self._aplicar_aulas(combinadas))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_aulas(self, aulas):
+        if not self.winfo_exists():
+            return
+        self.aulas = aulas
         self._filtrar_lista()
         self._renderizar_resumen()
+
+    def cargar_aulas(self):
+        """Public method - delegates to async."""
+        self._cargar_aulas_async()
 
     def _filtrar_lista(self, event=None):
         texto = self.entry_buscar.get().lower()
@@ -816,7 +843,17 @@ class CrearAulasView(ctk.CTkFrame):
 
     def refresh(self):
         """Llamado automáticamente por main_window al mostrar la vista."""
-        self.cargar_aulas()
+        self._cargar_aulas_async()
+
+    # ── Lifecycle ──
+    def on_show(self):
+        pass
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        pass
 
     def _seleccionar_aula(self, aula: dict):
         self.aula_seleccionada = aula

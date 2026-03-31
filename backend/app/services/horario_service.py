@@ -3,10 +3,13 @@ Servicio de Horarios - Lógica de negocio y validaciones.
 """
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
 
+from app.models.aula import Aula
 from app.models.horario import Horario
 from app.models.curso import Curso
 from app.models.docente import Docente
+from app.models.plantilla_horario import PlantillaBloque
 from app.schemas.horario import HorarioCreate, HorarioUpdate
 
 
@@ -24,6 +27,72 @@ class HorarioService:
         if not docente_id:
             return True  # Docente es opcional
         return db.query(Docente).filter(Docente.id == docente_id).first() is not None
+
+    def _obtener_bloque_plantilla(self, db: Session, bloque_id: int) -> PlantillaBloque:
+        bloque = db.query(PlantillaBloque).filter(PlantillaBloque.id == bloque_id).first()
+        if not bloque:
+            raise ValueError("Bloque de plantilla no encontrado")
+        return bloque
+
+    def _validar_consistencia_con_bloque(
+        self,
+        db: Session,
+        valores: Dict[str, Any],
+        valores_provistos: Dict[str, Any],
+        bloque: PlantillaBloque,
+    ) -> None:
+        plantilla = bloque.plantilla
+        if not plantilla:
+            raise ValueError("Plantilla del bloque no encontrada")
+
+        if bloque.tipo_bloque != "CLASE":
+            raise ValueError("Solo se puede asignar horarios a bloques tipo CLASE")
+
+        esperado = {
+            "dia_semana": bloque.dia_semana,
+            "hora_inicio": bloque.hora_inicio,
+            "hora_fin": bloque.hora_fin,
+            "grupo": plantilla.grupo,
+            "periodo": plantilla.periodo,
+            "turno": plantilla.turno,
+            "aula_id": plantilla.aula_id,
+        }
+
+        for campo, esperado_valor in esperado.items():
+            if campo in valores_provistos:
+                provisto = valores_provistos.get(campo)
+                if provisto is not None and provisto != esperado_valor:
+                    raise ValueError(f"{campo} debe coincidir con el bloque de plantilla")
+
+        valores["dia_semana"] = bloque.dia_semana
+        valores["hora_inicio"] = bloque.hora_inicio
+        valores["hora_fin"] = bloque.hora_fin
+        valores["grupo"] = plantilla.grupo
+        valores["periodo"] = plantilla.periodo
+        valores["turno"] = plantilla.turno
+        valores["aula_id"] = plantilla.aula_id
+
+        aula_nombre = plantilla.aula.nombre if plantilla.aula else None
+        if aula_nombre:
+            valores["aula"] = aula_nombre
+        elif plantilla.aula_id:
+            aula = db.query(Aula).filter(Aula.id == plantilla.aula_id).first()
+            if aula:
+                valores["aula"] = aula.nombre
+
+    def _aplicar_reglas_plantilla(
+        self,
+        db: Session,
+        valores: Dict[str, Any],
+        valores_provistos: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        bloque_id = valores.get("plantilla_bloque_id")
+        if not bloque_id:
+            return valores
+
+        bloque = self._obtener_bloque_plantilla(db, bloque_id)
+        self._validar_consistencia_con_bloque(db, valores, valores_provistos, bloque)
+        return valores
     
     def validar_conflicto_horario(
         self,
@@ -40,6 +109,7 @@ class HorarioService:
             Horario.grupo == grupo,
             Horario.dia_semana == dia_semana,
             Horario.activo == True,
+            ~and_(Horario.aula_id.is_(None), Horario.aula.is_(None)),
         )
         if periodo:
             query = query.filter(Horario.periodo == periodo)
@@ -70,6 +140,7 @@ class HorarioService:
             Horario.docente_id == docente_id,
             Horario.dia_semana == dia_semana,
             Horario.activo == True,
+            ~and_(Horario.aula_id.is_(None), Horario.aula.is_(None)),
         )
         if periodo:
             query = query.filter(Horario.periodo == periodo)
@@ -110,36 +181,46 @@ class HorarioService:
     
     def crear(self, db: Session, datos: HorarioCreate) -> Horario:
         """Crear nuevo horario."""
+        datos_horario = datos.model_dump(exclude_none=True)
+        datos_horario = self._aplicar_reglas_plantilla(db, datos_horario, datos_horario)
+
+        dia_semana = datos_horario.get("dia_semana")
+        hora_inicio = datos_horario.get("hora_inicio")
+        hora_fin = datos_horario.get("hora_fin")
+
+        if dia_semana is None or not hora_inicio or not hora_fin:
+            raise ValueError("dia_semana, hora_inicio y hora_fin son obligatorios")
+
         # Validar curso existe
-        if not self.validar_curso_existe(db, datos.curso_id):
+        if not self.validar_curso_existe(db, datos_horario["curso_id"]):
             raise ValueError("Curso no encontrado")
         
         # Validar docente existe
-        if not self.validar_docente_existe(db, datos.docente_id):
+        if not self.validar_docente_existe(db, datos_horario.get("docente_id")):
             raise ValueError("Docente no encontrado")
         
         # Validar no hay conflicto de horario
         if not self.validar_conflicto_horario(
             db,
-            datos.grupo,
-            datos.dia_semana,
-            datos.hora_inicio,
-            datos.hora_fin,
-            periodo=datos.periodo,
+            datos_horario["grupo"],
+            dia_semana,
+            hora_inicio,
+            hora_fin,
+            periodo=datos_horario.get("periodo"),
         ):
             raise ValueError("Ya existe un horario en ese bloque para este grupo")
 
         if not self.validar_conflicto_docente(
             db,
-            datos.docente_id,
-            datos.dia_semana,
-            datos.hora_inicio,
-            datos.hora_fin,
-            periodo=datos.periodo,
+            datos_horario.get("docente_id"),
+            dia_semana,
+            hora_inicio,
+            hora_fin,
+            periodo=datos_horario.get("periodo"),
         ):
             raise ValueError("El docente asignado ya esta en ese horario")
         
-        horario = Horario(**datos.model_dump())
+        horario = Horario(**datos_horario)
         db.add(horario)
         db.commit()
         db.refresh(horario)
@@ -187,31 +268,68 @@ class HorarioService:
             raise ValueError("Horario no encontrado")
         
         update_data = datos.model_dump(exclude_unset=True)
+        snapshot = {
+            "curso_id": horario.curso_id,
+            "docente_id": horario.docente_id,
+            "grupo": horario.grupo,
+            "periodo": horario.periodo,
+            "dia_semana": horario.dia_semana,
+            "hora_inicio": horario.hora_inicio,
+            "hora_fin": horario.hora_fin,
+            "aula": horario.aula,
+            "aula_id": horario.aula_id,
+            "turno": horario.turno,
+            "plantilla_bloque_id": horario.plantilla_bloque_id,
+            "activo": horario.activo,
+        }
+        snapshot.update(update_data)
+        snapshot = self._aplicar_reglas_plantilla(db, snapshot, update_data)
         
         # Validar curso si se cambia
-        if "curso_id" in update_data and not self.validar_curso_existe(db, update_data["curso_id"]):
+        if "curso_id" in update_data and not self.validar_curso_existe(db, snapshot["curso_id"]):
             raise ValueError("Curso no encontrado")
         
         # Validar docente si se cambia
-        if "docente_id" in update_data and not self.validar_docente_existe(db, update_data["docente_id"]):
+        if "docente_id" in update_data and not self.validar_docente_existe(db, snapshot.get("docente_id")):
             raise ValueError("Docente no encontrado")
         
-        # Validar conflicto si se cambian día/hora
-        if any(k in update_data for k in ["grupo", "dia_semana", "hora_inicio", "hora_fin", "periodo"]):
-            grupo = update_data.get("grupo", horario.grupo)
-            dia = update_data.get("dia_semana", horario.dia_semana)
-            inicio = update_data.get("hora_inicio", horario.hora_inicio)
-            fin = update_data.get("hora_fin", horario.hora_fin)
-            periodo = update_data.get("periodo", horario.periodo)
+        hay_cambio_conflicto = any(
+            snapshot.get(campo) != getattr(horario, campo)
+            for campo in [
+                "grupo",
+                "dia_semana",
+                "hora_inicio",
+                "hora_fin",
+                "periodo",
+                "docente_id",
+                "plantilla_bloque_id",
+            ]
+        )
 
-            if not self.validar_conflicto_horario(db, grupo, dia, inicio, fin, horario_id, periodo):
+        if hay_cambio_conflicto:
+            if not self.validar_conflicto_horario(
+                db,
+                snapshot["grupo"],
+                snapshot["dia_semana"],
+                snapshot["hora_inicio"],
+                snapshot["hora_fin"],
+                horario_id,
+                snapshot.get("periodo"),
+            ):
                 raise ValueError("Ya existe un horario en ese bloque para este grupo")
 
-            docente_id = update_data.get("docente_id", horario.docente_id)
-            if not self.validar_conflicto_docente(db, docente_id, dia, inicio, fin, horario_id, periodo):
+            if not self.validar_conflicto_docente(
+                db,
+                snapshot.get("docente_id"),
+                snapshot["dia_semana"],
+                snapshot["hora_inicio"],
+                snapshot["hora_fin"],
+                horario_id,
+                snapshot.get("periodo"),
+            ):
                 raise ValueError("El docente asignado ya esta en ese horario")
         
-        for field, value in update_data.items():
+        for field, value in snapshot.items():
             setattr(horario, field, value)
         
         db.commit()

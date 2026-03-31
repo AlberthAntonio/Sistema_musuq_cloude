@@ -1,0 +1,222 @@
+{
+  "benchmark_type": "baseline",
+  "timestamp": "2026-03-28T09:06:02.730872",
+  "base_url": "http://localhost:8000",
+  "iterations_per_endpoint": 10,
+  "results": {
+    "GET /alumnos": {
+      "iterations": 10,
+      "successful": 9,
+      "errors_count": 1,
+      "latency_p50_ms": 2.28,
+      "latency_p95_ms": 1229.41,
+      "latency_p99_ms": 1883.67,
+      "latency_avg_ms": 229.38,
+      "latency_min_ms": 1.59,
+      "latency_max_ms": 2047.23,
+      "payload_avg_bytes": 0,
+      "payload_max_bytes": 0,
+      "errors": [
+        {
+          "iteration": 0,
+          "error": "[WinError 10054] Se ha forzado la interrupción de una conexión existente por el host remoto"
+        }
+      ]
+    },
+    "GET /alumnos?periodo_id": {
+      "iterations": 10,
+      "successful": 10,
+      "errors_count": 0,
+      "latency_p50_ms": 1.82,
+      "latency_p95_ms": 1.96,
+      "latency_p99_ms": 1.97,
+      "latency_avg_ms": 1.78,
+      "latency_min_ms": 1.58,
+      "latency_max_ms": 1.97,
+      "payload_avg_bytes": 0,
+      "payload_max_bytes": 0,
+      "errors": null
+    },
+    "GET /asistencia": {
+      "iterations": 10,
+      "successful": 10,
+      "errors_count": 0,
+      "latency_p50_ms": 1.99,
+      "latency_p95_ms": 2.58,
+      "latency_p99_ms": 2.7,
+      "latency_avg_ms": 2.02,
+      "latency_min_ms": 1.53,
+      "latency_max_ms": 2.73,
+      "payload_avg_bytes": 0,
+      "payload_max_bytes": 0,
+      "errors": null
+    },
+    "GET /matriculas": {
+      "iterations": 10,
+      "successful": 10,
+      "errors_count": 0,
+      "latency_p50_ms": 1.75,
+      "latency_p95_ms": 2.26,
+      "latency_p99_ms": 2.36,
+      "latency_avg_ms": 1.85,
+      "latency_min_ms": 1.64,
+      "latency_max_ms": 2.39,
+      "payload_avg_bytes": 0,
+      "payload_max_bytes": 0,
+      "errors": null
+    },
+    "GET /pagos": {
+      "iterations": 10,
+      "successful": 10,
+      "errors_count": 0,
+      "latency_p50_ms": 1.81,
+      "latency_p95_ms": 33.44,
+      "latency_p99_ms": 53.54,
+      "latency_avg_ms": 7.61,
+      "latency_min_ms": 1.68,
+      "latency_max_ms": 58.57,
+      "payload_avg_bytes": 0,
+      "payload_max_bytes": 0,
+      "errors": null
+    },
+    "GET /reportes/deudores": {
+      "iterations": 10,
+      "successful": 10,
+      "errors_count": 10,
+      "latency_p50_ms": 3.79,
+      "latency_p95_ms": 4.6,
+      "latency_p99_ms": 4.66,
+      "latency_avg_ms": 3.88,
+      "latency_min_ms": 3.23,
+      "latency_max_ms": 4.67,
+      "payload_avg_bytes": 98,
+      "payload_max_bytes": 98,
+      "errors": [
+        {
+          "iteration": 0,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 1,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 2,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 3,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 4,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 5,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 6,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 7,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 8,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        },
+        {
+          "iteration": 9,
+          "status": 422,
+          "body": "{\"detail\":\"Consulta muy amplia. Enviar al menos periodo_id, grupo o modalidad.\",\"status_code\":422}"
+        }
+      ]
+    },
+    "GET /reportes/tardanzas": {
+      "iterations": 10,
+      "successful": 10,
+      "errors_count": 0,
+      "latency_p50_ms": 11.68,
+      "latency_p95_ms": 12.71,
+      "latency_p99_ms": 12.85,
+      "latency_avg_ms": 11.75,
+      "latency_min_ms": 10.77,
+      "latency_max_ms": 12.89,
+      "payload_avg_bytes": 28158,
+      "payload_max_bytes": 28158,
+      "errors": null
+    },
+    "GET /reportes/asistencia": {
+      "iterations": 10,
+      "successful": 5,
+      "errors_count": 10,
+      "latency_p50_ms": 2065.99,
+      "latency_p95_ms": 2076.84,
+      "latency_p99_ms": 2077.55,
+      "latency_avg_ms": 1653.9,
+      "latency_min_ms": 11.0,
+      "latency_max_ms": 2077.73,
+      "payload_avg_bytes": 67,
+      "payload_max_bytes": 67,
+      "errors": [
+        {
+          "iteration": 0,
+          "status": 500,
+          "body": "{\"detail\":\"Error interno del servidor. Contacta al administrador.\"}"
+        },
+        {
+          "iteration": 1,
+          "error": "[WinError 10054] Se ha forzado la interrupción de una conexión existente por el host remoto"
+        },
+        {
+          "iteration": 2,
+          "status": 500,
+          "body": "{\"detail\":\"Error interno del servidor. Contacta al administrador.\"}"
+        },
+        {
+          "iteration": 3,
+          "error": "[WinError 10054] Se ha forzado la interrupción de una conexión existente por el host remoto"
+        },
+        {
+          "iteration": 4,
+          "status": 500,
+          "body": "{\"detail\":\"Error interno del servidor. Contacta al administrador.\"}"
+        },
+        {
+          "iteration": 5,
+          "error": "[WinError 10054] Se ha forzado la interrupción de una conexión existente por el host remoto"
+        },
+        {
+          "iteration": 6,
+          "status": 500,
+          "body": "{\"detail\":\"Error interno del servidor. Contacta al administrador.\"}"
+        },
+        {
+          "iteration": 7,
+          "error": "[WinError 10054] Se ha forzado la interrupción de una conexión existente por el host remoto"
+        },
+        {
+          "iteration": 8,
+          "status": 500,
+          "body": "{\"detail\":\"Error interno del servidor. Contacta al administrador.\"}"
+        },
+        {
+          "iteration": 9,
+          "error": "[WinError 10054] Se ha forzado la interrupción de una conexión existente por el host remoto"
+        }
+      ]
+    }
+  }
+}

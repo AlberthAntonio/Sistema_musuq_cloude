@@ -11,6 +11,9 @@ import threading
 from controllers.reporte_controller import ReporteController
 import styles.tabla_style as st
 from core.theme_manager import TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class ReporteListasView(ctk.CTkFrame):
@@ -49,8 +52,8 @@ class ReporteListasView(ctk.CTkFrame):
         self._crear_columna_tabla()
         self._crear_columna_config()
 
-        # Cargar combos de listas favoritas
-        self.actualizar_combo_listas()
+        # Cargar combos de listas favoritas (async)
+        self._cargar_favoritas_async()
 
     # =====================================================================
     # COLUMNA 1: FILTROS (Panel izquierdo)
@@ -83,36 +86,24 @@ class ReporteListasView(ctk.CTkFrame):
             text_color=TM.text()
         ).pack(side="left")
 
-        grupos, modalidades, turnos = self.controller.obtener_filtros_disponibles()
+        # Placeholder para filtros (se cargarán async)
+        self._fr_filtros_container = ctk.CTkFrame(pnl_filtros, fg_color="transparent")
+        self._fr_filtros_container.pack(fill="x", padx=18)
 
-        def crear_filtro(titulo, valores, comando=None):
-            ctk.CTkLabel(
-                pnl_filtros,
-                text=titulo,
-                font=CTkFont(family="Roboto", size=12, weight="bold"),
-                text_color=TM.text_secondary()
-            ).pack(anchor="w", padx=18, pady=(8, 3))
+        ctk.CTkLabel(
+            self._fr_filtros_container,
+            text="⏳ Cargando filtros...",
+            font=CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        ).pack(pady=10)
 
-            cb = ctk.CTkComboBox(
-                pnl_filtros,
-                values=valores,
-                command=comando,
-                fg_color=TM.bg_card(),
-                text_color=TM.text(),
-                dropdown_fg_color=TM.bg_panel(),
-                border_color="#404040",
-                border_width=1,
-                button_color=TM.primary(),
-                button_hover_color="#3498db",
-                font=CTkFont(family="Roboto", size=11),
-                height=34
-            )
-            cb.pack(fill="x", padx=18, pady=(0, 6))
-            return cb
+        # Inicializar combos vacíos
+        self.cb_grupo = None
+        self.cb_modalidad = None
+        self.cb_horario = None
 
-        self.cb_grupo = crear_filtro("Grupo/Salón:", ["Todos"] + grupos)
-        self.cb_modalidad = crear_filtro("Modalidad:", ["Todas"] + modalidades, self.al_cambiar_modalidad)
-        self.cb_horario = crear_filtro("Horario:", ["Todos"] + turnos)
+        # Cargar filtros en background
+        self._cargar_filtros_async(pnl_filtros)
 
         # Botón Cargar con estilo destacado
         self.btn_cargar = ctk.CTkButton(
@@ -126,6 +117,52 @@ class ReporteListasView(ctk.CTkFrame):
             command=self.cargar_alumnos_thread
         )
         self.btn_cargar.pack(padx=18, pady=20, fill="x")
+
+    def _cargar_filtros_async(self, pnl_filtros):
+        """Cargar filtros en background."""
+        def _hilo():
+            grupos, modalidades, turnos = self.controller.obtener_filtros_disponibles()
+            if self.winfo_exists():
+                self.after(0, lambda: self._aplicar_filtros(grupos, modalidades, turnos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_filtros(self, grupos, modalidades, turnos):
+        if not self.winfo_exists():
+            return
+
+        # Limpiar placeholder
+        for w in self._fr_filtros_container.winfo_children():
+            w.destroy()
+
+        def crear_filtro(titulo, valores, comando=None):
+            ctk.CTkLabel(
+                self._fr_filtros_container,
+                text=titulo,
+                font=CTkFont(family="Roboto", size=12, weight="bold"),
+                text_color=TM.text_secondary()
+            ).pack(anchor="w", pady=(8, 3))
+
+            cb = ctk.CTkComboBox(
+                self._fr_filtros_container,
+                values=valores,
+                command=comando,
+                fg_color=TM.bg_card(),
+                text_color=TM.text(),
+                dropdown_fg_color=TM.bg_panel(),
+                border_color="#404040",
+                border_width=1,
+                button_color=TM.primary(),
+                button_hover_color="#3498db",
+                font=CTkFont(family="Roboto", size=11),
+                height=34
+            )
+            cb.pack(fill="x", pady=(0, 6))
+            return cb
+
+        self.cb_grupo = crear_filtro("Grupo/Salón:", ["Todos"] + grupos)
+        self.cb_modalidad = crear_filtro("Modalidad:", ["Todas"] + modalidades, self.al_cambiar_modalidad)
+        self.cb_horario = crear_filtro("Horario:", ["Todos"] + turnos)
 
     # =====================================================================
     # COLUMNA 2: TABLA CON SCROLL INFINITO (Centro)
@@ -487,26 +524,7 @@ class ReporteListasView(ctk.CTkFrame):
     # THREADING - CARGA DE ALUMNOS (misma lógica)
     # =====================================================================
 
-    def cargar_alumnos_thread(self):
-        """Inicia la carga de alumnos en un hilo separado."""
-        self.limpiar_tabla_visual()
 
-        # Mostrar loader centrado
-        self._mostrar_loading()
-        self.update_idletasks()
-
-        self.btn_cargar.configure(state="disabled")
-        self._ocultar_vacio()
-
-        grupo = self.cb_grupo.get()
-        modalidad = self.cb_modalidad.get()
-        horario = self.cb_horario.get()
-
-        threading.Thread(
-            target=self._proceso_busqueda,
-            args=(grupo, modalidad, horario),
-            daemon=True
-        ).start()
 
     def _proceso_busqueda(self, g, m, h):
         """Worker Thread - Búsqueda en BD."""
@@ -591,13 +609,25 @@ class ReporteListasView(ctk.CTkFrame):
         else:
             messagebox.showerror("Error", msg)
 
-    def actualizar_combo_listas(self):
-        listas = self.controller.obtener_listas_guardadas()
-        self.listas_map = {l.nombre: l.id for l in listas}
+    def _cargar_favoritas_async(self):
+        """Cargar listas favoritas en background."""
+        def _hilo():
+            listas = self.controller.obtener_listas_guardadas()
+            if self.winfo_exists():
+                self.after(0, lambda: self._aplicar_favoritas(listas))
 
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_favoritas(self, listas):
+        if not self.winfo_exists():
+            return
+        self.listas_map = {l.nombre: l.id for l in listas}
         valores = ["-- Seleccionar --"] + list(self.listas_map.keys())
         self.cb_listas.configure(values=valores)
         self.cb_listas.set("-- Seleccionar --")
+
+    def actualizar_combo_listas(self):
+        self._cargar_favoritas_async()
 
     def cargar_lista_favorita(self, nombre_lista):
         if nombre_lista == "-- Seleccionar --":
@@ -687,3 +717,34 @@ class ReporteListasView(ctk.CTkFrame):
             text=f"{count} alumnos seleccionados",
             text_color=TM.success() if count > 0 else "gray"
         )
+
+    def cargar_alumnos_thread(self):
+        """Inicia la carga de alumnos en un hilo separado."""
+        if not self.cb_grupo:
+            messagebox.showwarning("Espere", "Los filtros aún se están cargando.")
+            return
+        self.limpiar_tabla_visual()
+        self._mostrar_loading()
+        self.update_idletasks()
+        self.btn_cargar.configure(state="disabled")
+        self._ocultar_vacio()
+
+        grupo = self.cb_grupo.get()
+        modalidad = self.cb_modalidad.get()
+        horario = self.cb_horario.get()
+
+        threading.Thread(
+            target=self._proceso_busqueda,
+            args=(grupo, modalidad, horario),
+            daemon=True
+        ).start()
+
+    # ── Lifecycle ──
+    def on_show(self):
+        pass
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        pass

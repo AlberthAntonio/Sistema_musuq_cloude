@@ -20,10 +20,12 @@ class AlumnosListPanel(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         
         self.auth_client = auth_client
-        self.alumno_client = AlumnoClient()
-        self.alumno_client.token = auth_client.token
-        self.matricula_client = MatriculasClient()
-        self.matricula_client.token = auth_client.token
+        self._auth_token = auth_client.token
+        self.alumno_client = None
+        self.matricula_client = None
+        self._ui_ready = False
+        self._loading_frame = None
+        self._debounce_id = None
         
         # Cache de datos
         self.alumnos_cache: List[Dict] = []
@@ -39,7 +41,38 @@ class AlumnosListPanel(ctk.CTkFrame):
         # Anchos de columnas
         self.ANCHOS = [70, 82, 190, 100, 40, 110, 135]
         
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder liviano para mostrar la vista al instante."""
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.pack(fill="both", expand=True)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando lista de alumnos...",
+            font=ctk.CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye UI y clientes fuera del constructor para reducir show_view."""
+        if self._ui_ready:
+            return
+
+        if self.alumno_client is None:
+            self.alumno_client = AlumnoClient(load_cached_session=False)
+            self.alumno_client.token = self._auth_token
+        if self.matricula_client is None:
+            self.matricula_client = MatriculasClient(load_cached_session=False)
+            self.matricula_client.token = self._auth_token
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+
         self.create_widgets()
+        self._ui_ready = True
         self.cargar_datos_thread()
     
     def create_widgets(self):
@@ -89,7 +122,7 @@ class AlumnosListPanel(ctk.CTkFrame):
             text_color=TM.text()
         )
         self.entry_buscar.pack(side="left", fill="x", expand=True)
-        self.entry_buscar.bind("<KeyRelease>", self.filtrar_tabla)
+        self.entry_buscar.bind("<KeyRelease>", self._debounced_filtrar_tabla)
 
         ctk.CTkFrame(fr_fila1, width=2, height=22, fg_color="#505050").pack(side="left", padx=10)
 
@@ -569,6 +602,15 @@ class AlumnosListPanel(ctk.CTkFrame):
         # Renderizar primer lote
         self.scroll_tabla._parent_canvas.yview_moveto(0.0)
         self._renderizar_lote()
+
+    def _debounced_filtrar_tabla(self, event=None):
+        """Debounce para evitar reprocesar filtros en cada tecla."""
+        if self._debounce_id is not None:
+            try:
+                self.after_cancel(self._debounce_id)
+            except Exception:
+                pass
+        self._debounce_id = self.after(180, self.filtrar_tabla)
     
     def _renderizar_lote(self):
         """Renderizar siguiente lote de filas"""
@@ -639,7 +681,25 @@ class AlumnosListPanel(ctk.CTkFrame):
     
     def refresh(self):
         """Refrescar datos"""
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+            return
         self.cargar_datos_thread()
+
+    def on_show(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        if self._debounce_id is not None:
+            try:
+                self.after_cancel(self._debounce_id)
+            except Exception:
+                pass
+            self._debounce_id = None
+
+    def cleanup(self):
+        self.on_hide()
 
     def _limpiar_tabla(self):
         """Limpiar solo las filas del scroll."""

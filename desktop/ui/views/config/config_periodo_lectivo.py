@@ -27,12 +27,38 @@ class ConfigPeriodoView(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=6)
         self.grid_rowconfigure(0, weight=1)
 
+        self._ui_ready = False
+        self._loading_frame = None
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder inicial para mostrar la vista de inmediato."""
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando configuración de periodo...",
+            font=("Roboto", 14, "bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye el formulario completo después del primer render."""
+        if self._ui_ready:
+            return
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+
         # Paneles
         self._crear_panel_lista()
         self._crear_panel_derecho()
 
         # Calcular duración inicial
         self.calcular_duracion()
+        self._ui_ready = True
 
     # ============================
     # PANEL IZQUIERDO: TIMELINE
@@ -702,3 +728,13 @@ class ConfigPeriodoView(ctk.CTkFrame):
                 f"Cree un nuevo periodo para continuar operando.\n\n"
                 f"(Funcionalidad pendiente)",
             )
+
+    def on_show(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        self.on_hide()

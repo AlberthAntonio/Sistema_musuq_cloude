@@ -16,6 +16,9 @@ import threading
 import time
 
 from core.theme_manager import TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class CarnetView(ctk.CTkFrame):
@@ -131,8 +134,8 @@ class CarnetView(ctk.CTkFrame):
 
         self.cb_grupo = ctk.CTkComboBox(
             pnl_izq,
-            values=self.controller.obtener_grupos(),
-            command=self.cargar_lista,
+            values=["Cargando..."],
+            command=self._cargar_lista_async,
             fg_color=TM.bg_card(),
             dropdown_fg_color=TM.bg_panel(),
             text_color=TM.text(),
@@ -141,6 +144,9 @@ class CarnetView(ctk.CTkFrame):
             height=34
         )
         self.cb_grupo.pack(fill="x", padx=15, pady=5)
+
+        # Cargar grupos async
+        self._cargar_grupos_async()
 
         # --- Tabla Alumnos ---
         fr_tree = ctk.CTkFrame(pnl_izq, fg_color="transparent")
@@ -489,9 +495,39 @@ class CarnetView(ctk.CTkFrame):
     # LÓGICA DE DATOS (MISMA QUE ORIGINAL)
     # ============================================================
 
+    def _cargar_grupos_async(self):
+        """Cargar grupos en background."""
+        def _hilo():
+            grupos = self.controller.obtener_grupos()
+            if self.winfo_exists():
+                self.after(0, lambda: self._aplicar_grupos(grupos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_grupos(self, grupos):
+        if not self.winfo_exists():
+            return
+        self.cb_grupo.configure(values=grupos)
+        if grupos:
+            self.cb_grupo.set(grupos[0])
+
+    def _cargar_lista_async(self, grupo):
+        """Cargar lista de alumnos en background."""
+        def _hilo():
+            alumnos = self.controller.buscar_alumnos(grupo)
+            if self.winfo_exists():
+                self.after(0, lambda: self._aplicar_lista(alumnos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_lista(self, alumnos):
+        if not self.winfo_exists():
+            return
+        self.todos_alumnos = alumnos
+        self.actualizar_treeview(alumnos)
+
     def cargar_lista(self, grupo):
-        self.todos_alumnos = self.controller.buscar_alumnos(grupo)
-        self.actualizar_treeview(self.todos_alumnos)
+        self._cargar_lista_async(grupo)
 
     def actualizar_treeview(self, lista_alumnos):
         for item in self.tree.get_children():
@@ -663,3 +699,13 @@ class CarnetView(ctk.CTkFrame):
 
     def seleccionar_todo(self):
         self.tree.selection_set(self.tree.get_children())
+
+    # ── Lifecycle ──
+    def on_show(self):
+        pass
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        pass

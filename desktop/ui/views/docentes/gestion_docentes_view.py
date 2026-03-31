@@ -8,10 +8,14 @@ import customtkinter as ctk
 from tkinter import messagebox
 from datetime import date
 from typing import Dict, Any
+import threading
 
 from controllers.docentes_controller import DocentesController
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 #from ui.views.docentes.resumen_docentes_view import ResumenDocenteView
 
 
@@ -25,6 +29,8 @@ class GestionDocentesView(ctk.CTkFrame):
         # Variables de estado
         self.docente_seleccionado_id = None
         self.docente_seleccionado_data = None
+        self._debounce_timer = None
+        self._request_id = 0
 
         # Layout principal (formulario + tabla)
         self.grid_columnconfigure(0, weight=1)  # Formulario
@@ -455,15 +461,41 @@ class GestionDocentesView(ctk.CTkFrame):
             ).pack(side="left", padx=2)
 
     def cargar_tabla(self):
-        """Cargar datos usando controller"""
-        # Limpiar tabla
+        """Cargar datos usando controller (background thread)"""
+        # Limpiar tabla y mostrar loading
         for w in self.scroll_tabla.winfo_children():
             w.destroy()
 
+        # Mostrar loading
+        loading_frame = ctk.CTkFrame(self.scroll_tabla, fg_color="transparent")
+        loading_frame.pack(fill="both", expand=True, pady=60)
+        ctk.CTkLabel(
+            loading_frame,
+            text="⏳ Cargando docentes...",
+            font=ctk.CTkFont(family="Roboto", size=14),
+            text_color=TM.text_secondary()
+        ).pack()
+
         criterio = self.entry_buscar.get().strip()
         filtro = self.radio_var.get()
+        self._request_id += 1
+        req_id = self._request_id
 
-        resultados = self.controller.obtener_docentes(criterio, filtro)
+        def _hilo():
+            resultados = self.controller.obtener_docentes(criterio, filtro)
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._renderizar_tabla(resultados))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _renderizar_tabla(self, resultados):
+        """Renderizar resultados en la tabla (hilo principal)"""
+        if not self.winfo_exists():
+            return
+
+        # Limpiar tabla
+        for w in self.scroll_tabla.winfo_children():
+            w.destroy()
 
         if not resultados:
             # Estado vacío
@@ -680,9 +712,33 @@ class GestionDocentesView(ctk.CTkFrame):
         self.entry_dni.focus()
 
     def buscar_docente(self, event):
-        """Búsqueda en tiempo real"""
-        self.cargar_tabla()
+        """Búsqueda con debounce (500ms)"""
+        if self._debounce_timer:
+            try:
+                self.after_cancel(self._debounce_timer)
+            except Exception:
+                pass
+        self._debounce_timer = self.after(500, self.cargar_tabla)
 
     def filtrar_tabla(self):
         """Aplicar filtro a la tabla"""
         self.cargar_tabla()
+
+    # ================= CICLO DE VIDA =================
+
+    def on_show(self):
+        """Llamado cuando la vista se hace visible"""
+        pass
+
+    def on_hide(self):
+        """Llamado cuando la vista se oculta"""
+        if self._debounce_timer:
+            try:
+                self.after_cancel(self._debounce_timer)
+            except Exception:
+                pass
+            self._debounce_timer = None
+
+    def cleanup(self):
+        """Limpieza total al destruir (logout)"""
+        self.on_hide()

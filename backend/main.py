@@ -12,16 +12,19 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
 from app.core.logging_config import setup_logging, logger
+from app.core.metrics import MetricsMiddleware, register_sql_metrics
+from app.db.database import engine
 from app.api.routes import (
     auth, usuarios, alumnos, asistencia, health,
     cursos, docentes, horarios, eventos, listas, notas, pagos, sesiones, aulas,
-    periodos, matriculas, obligaciones, reportes
+    periodos, matriculas, obligaciones, reportes, metrics, plantilla_horarios
 )
 
 # ---------------------------------------------------------------------------
@@ -44,6 +47,7 @@ async def lifespan(app: FastAPI):
         settings.DEBUG,
         "SQLite" if settings.USE_SQLITE else "PostgreSQL"
     )
+    register_sql_metrics(engine)
     yield
     logger.info("Apagando %s", settings.APP_NAME)
 
@@ -65,6 +69,14 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
+# Configuración de Middlewares (El orden importa)
+# ---------------------------------------------------------------------------
+
+# 1. Tracing Context (Correlational IDs para Logs JSON)
+from app.api.middleware.request_context import RequestContextMiddleware
+app.add_middleware(RequestContextMiddleware)
+
+# ---------------------------------------------------------------------------
 # Middleware: CORS
 # ---------------------------------------------------------------------------
 app.add_middleware(
@@ -73,8 +85,18 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-    expose_headers=["X-Total-Count", "X-Request-ID"],
+    expose_headers=["X-Total-Count", "X-Request-ID", "X-Response-Time-Ms", "X-Has-Next"],
 )
+
+# ---------------------------------------------------------------------------
+# Middleware: GZip Compression (min 500 bytes)
+# ---------------------------------------------------------------------------
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+# ---------------------------------------------------------------------------
+# Middleware: Métricas de rendimiento
+# ---------------------------------------------------------------------------
+app.add_middleware(MetricsMiddleware)
 
 # ---------------------------------------------------------------------------
 # Middleware: Request ID + logging de peticiones
@@ -82,7 +104,12 @@ app.add_middleware(
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
     """Asigna un ID único a cada petición y registra duración + status."""
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+    request_id = (
+        getattr(request.state, "request_id", None)
+        or request.headers.get("X-Request-ID")
+        or request.headers.get("X-Request-Id")
+        or str(uuid.uuid4())[:8]
+    )
     start_time = time.time()
 
     # Inyectar request_id en el state para que los handlers puedan usarlo
@@ -175,11 +202,13 @@ app.include_router(cursos.router, prefix="/cursos", tags=["Cursos"])
 app.include_router(aulas.router, prefix="/aulas", tags=["Aulas"])
 app.include_router(docentes.router, prefix="/docentes", tags=["Docentes"])
 app.include_router(horarios.router, prefix="/horarios", tags=["Horarios"])
+app.include_router(plantilla_horarios.router, tags=["Plantillas Horario"])
 app.include_router(eventos.router, prefix="/eventos", tags=["Eventos"])
 app.include_router(listas.router, prefix="/listas", tags=["Listas"])
 app.include_router(notas.router, prefix="/notas", tags=["Notas"])
 app.include_router(sesiones.router, prefix="/sesiones", tags=["Sesiones"])
 app.include_router(reportes.router, prefix="/reportes", tags=["Reportes"])
+app.include_router(metrics.router, prefix="/metrics", tags=["Métricas"])
 
 
 # ---------------------------------------------------------------------------

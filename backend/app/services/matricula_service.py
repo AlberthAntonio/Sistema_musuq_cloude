@@ -42,6 +42,10 @@ class MatriculaService:
         
         return f"{prefijo_base}{consecutivo:04d}"
     
+    def __init__(self, repo=None):
+        from app.repositories.matricula_repository import matricula_repo
+        self.repo = repo or matricula_repo
+
     def listar(
         self,
         db: Session,
@@ -52,19 +56,35 @@ class MatriculaService:
         skip: int = 0,
         limit: int = 100
     ) -> List[Matricula]:
-        """Listar matrículas con filtros opcionales."""
-        query = db.query(Matricula)
-        
-        if periodo_id:
-            query = query.filter(Matricula.periodo_id == periodo_id)
-        if alumno_id:
-            query = query.filter(Matricula.alumno_id == alumno_id)
-        if grupo:
-            query = query.filter(Matricula.grupo == grupo)
-        if estado is not None:
-            query = query.filter(Matricula.estado == estado)
-        
-        return query.order_by(Matricula.fecha_registro.desc()).offset(skip).limit(limit).all()
+        """Listar matrículas delegando a Repositorio."""
+        from app.repositories.matricula_repository import MatriculaQuerySpec
+        spec = MatriculaQuerySpec(
+            periodo_id=periodo_id,
+            alumno_id=alumno_id,
+            grupo=grupo,
+            estado=estado,
+            skip=skip,
+            limit=limit,
+        )
+        return self.repo.find_all(db, spec)
+
+    def contar(
+        self,
+        db: Session,
+        periodo_id: Optional[int] = None,
+        alumno_id: Optional[int] = None,
+        grupo: Optional[str] = None,
+        estado: Optional[str] = "activo",
+    ) -> int:
+        """Contar matrículas delegando a Repositorio."""
+        from app.repositories.matricula_repository import MatriculaQuerySpec
+        spec = MatriculaQuerySpec(
+            periodo_id=periodo_id,
+            alumno_id=alumno_id,
+            grupo=grupo,
+            estado=estado,
+        )
+        return self.repo.count_all(db, spec)
     
     def crear(self, db: Session, datos: MatriculaCreate, usuario_actual_id: Optional[int] = None) -> Matricula:
         """Crear nueva matrícula con generación automática de código."""

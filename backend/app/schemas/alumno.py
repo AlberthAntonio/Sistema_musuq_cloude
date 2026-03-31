@@ -43,6 +43,7 @@ class AlumnoResponse(AlumnoBase):
     """Esquema de respuesta de alumno."""
     id: int
     activo: bool
+    tiene_foto: bool = False
     creado_por: Optional[int] = None
     fecha_registro: Optional[datetime] = None
     codigo_matricula: Optional[str] = None
@@ -59,5 +60,21 @@ class AlumnoResumen(BaseModel):
     nombre_completo: str
     activo: bool
     
+    class Config:
+        from_attributes = True
+
+
+class AlumnoListItem(BaseModel):
+    """Esquema reducido para endpoints de listado. Reduce payload ~40%."""
+    id: int
+    dni: str
+    nombres: str
+    apell_paterno: str
+    apell_materno: str
+    activo: bool
+    tiene_foto: bool = False
+    codigo_matricula: Optional[str] = None
+    horario: Optional[str] = None
+
     class Config:
         from_attributes = True

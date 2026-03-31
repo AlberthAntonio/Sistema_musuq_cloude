@@ -2,7 +2,7 @@
 Modelo de Alumno - Solo datos personales.
 Los datos académicos y financieros ahora viven en Matricula y ObligacionPago.
 """
-from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, Text, ForeignKey, LargeBinary
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -28,6 +28,8 @@ class Alumno(Base):
     celular_padre_1 = Column(String(20), nullable=True)
     celular_padre_2 = Column(String(20), nullable=True)
     descripcion = Column(Text, nullable=True)
+    foto_data = Column(LargeBinary, nullable=True)
+    foto_mime_type = Column(String(100), nullable=True)
     
     # Auditoría
     creado_por = Column(Integer, ForeignKey('usuarios.id'), nullable=True)
@@ -64,6 +66,10 @@ class Alumno(Base):
         activas = [m for m in self.matriculas if m.estado == "activo"]
         m = activas[0] if activas else (self.matriculas[0] if self.matriculas else None)
         return m.horario if m else None
+
+    @property
+    def tiene_foto(self) -> bool:
+        return bool(self.foto_data)
 
     def __repr__(self):
         return f"<Alumno {self.dni}: {self.nombre_completo}>"

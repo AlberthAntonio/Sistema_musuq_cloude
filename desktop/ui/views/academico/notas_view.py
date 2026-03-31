@@ -22,7 +22,8 @@ class NotasView(ctk.CTkFrame):
 
     def __init__(self, parent, auth_client=None):
         super().__init__(parent, fg_color="transparent")
-        self.controller = AcademicoController(auth_client.token if auth_client else "")
+        self._auth_token = auth_client.token if auth_client else ""
+        self.controller = None
 
         # Variables de estado
         self.sesion_actual = None
@@ -33,11 +34,40 @@ class NotasView(ctk.CTkFrame):
         self.items_por_pagina = 30
         self.total_paginas = 1
         self.alumnos_filtrados_cache = []
+        self._ui_ready = False
+        self._loading_frame = None
+
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder inicial antes de construir la sábana completa."""
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando modulo de notas...",
+            font=ctk.CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye widgets y carga exámenes luego del primer render."""
+        if self._ui_ready:
+            return
+
+        if self.controller is None:
+            self.controller = AcademicoController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
 
         self.create_widgets()
-
-        # Cargar exámenes al iniciar
-        self.after(200, self.cargar_lista_sesiones)
+        self.after(150, self.cargar_lista_sesiones)
+        self._ui_ready = True
 
     def create_widgets(self):
         # Layout principal con grid
@@ -937,3 +967,15 @@ class NotasView(ctk.CTkFrame):
             )
         else:
             messagebox.showerror("❌ Error", msg)
+
+    # ================= CICLO DE VIDA =================
+
+    def on_show(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        self.on_hide()

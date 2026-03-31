@@ -8,7 +8,7 @@ class DocentesController:
     """
     
     def __init__(self, auth_token: str):
-        self.docentes_client = DocentesClient()
+        self.docentes_client = DocentesClient(load_cached_session=False)
         self.docentes_client.token = auth_token
         self._cache_docentes = None
 

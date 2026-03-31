@@ -1,4 +1,7 @@
 import customtkinter as ctk
+from typing import Optional, Callable
+from PIL import Image
+import tkinter as tk
 from core.theme_manager import ThemeManager as TM
 
 class StudentPreviewCard(ctk.CTkFrame):
@@ -6,6 +9,11 @@ class StudentPreviewCard(ctk.CTkFrame):
     def __init__(self, parent):
         super().__init__(parent, fg_color=TM.bg_card(), corner_radius=16, 
                         border_width=1, border_color=TM.get_theme().border)
+
+        self._on_pick_photo: Optional[Callable[[], None]] = None
+        self._on_capture_photo: Optional[Callable[[], None]] = None
+        self._on_clear_photo: Optional[Callable[[], None]] = None
+        self._photo_image = None
         
         self._create_ui()
         
@@ -31,8 +39,11 @@ class StudentPreviewCard(ctk.CTkFrame):
         content_carnet.grid_columnconfigure(1, weight=1)
 
         # --- A. FOTO ---
-        foto_container = ctk.CTkFrame(
-            content_carnet, 
+        foto_panel = ctk.CTkFrame(content_carnet, fg_color="transparent")
+        foto_panel.grid(row=0, column=0, rowspan=2, padx=(0, 15), sticky="n")
+
+        self.foto_container = ctk.CTkFrame(
+            foto_panel,
             width=90, 
             height=110, 
             fg_color=TM.bg_panel(),
@@ -40,14 +51,55 @@ class StudentPreviewCard(ctk.CTkFrame):
             border_width=1,
             border_color=TM.get_theme().border
         )
-        foto_container.grid(row=0, column=0, rowspan=2, padx=(0, 15))
-        foto_container.pack_propagate(False)
+        self.foto_container.pack(fill="x")
+        self.foto_container.pack_propagate(False)
 
-        ctk.CTkLabel(
-            foto_container, 
+        self.lbl_photo = ctk.CTkLabel(
+            self.foto_container,
             text="👤", 
             font=ctk.CTkFont(size=40)
-        ).place(relx=0.5, rely=0.5, anchor="center")
+        )
+        self.lbl_photo.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+        foto_actions = ctk.CTkFrame(foto_panel, fg_color="transparent")
+        foto_actions.pack(fill="x", pady=(6, 0))
+
+        self.btn_subir_foto = ctk.CTkButton(
+            foto_actions,
+            text="Subir",
+            height=26,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color=TM.primary(),
+            state="disabled",
+            command=self._handle_pick_photo,
+        )
+        self.btn_subir_foto.pack(fill="x", pady=(0, 4))
+
+        self.btn_capturar_foto = ctk.CTkButton(
+            foto_actions,
+            text="Camara",
+            height=26,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color="#0ea5e9",
+            hover_color="#0284c7",
+            state="disabled",
+            command=self._handle_capture_photo,
+        )
+        self.btn_capturar_foto.pack(fill="x", pady=(0, 4))
+
+        self.btn_quitar_foto = ctk.CTkButton(
+            foto_actions,
+            text="Quitar",
+            height=24,
+            font=ctk.CTkFont(size=10),
+            fg_color="transparent",
+            border_width=1,
+            border_color=TM.get_theme().border,
+            text_color=TM.text_secondary(),
+            state="disabled",
+            command=self._handle_clear_photo,
+        )
+        self.btn_quitar_foto.pack(fill="x")
 
         # --- B. DATOS PRINCIPALES ---
         info_frame = ctk.CTkFrame(content_carnet, fg_color="transparent")
@@ -160,6 +212,111 @@ class StudentPreviewCard(ctk.CTkFrame):
         lbl.pack(side="left")
         setattr(self, attr_name, lbl)
 
+    def set_photo_actions(
+        self,
+        on_pick_photo: Optional[Callable[[], None]] = None,
+        on_capture_photo: Optional[Callable[[], None]] = None,
+        on_clear_photo: Optional[Callable[[], None]] = None,
+    ):
+        """Vincula callbacks para acciones de foto del panel."""
+        self._on_pick_photo = on_pick_photo
+        self._on_capture_photo = on_capture_photo
+        self._on_clear_photo = on_clear_photo
+
+        self.btn_subir_foto.configure(state="normal" if on_pick_photo else "disabled")
+        self.btn_capturar_foto.configure(state="normal" if on_capture_photo else "disabled")
+        self.btn_quitar_foto.configure(state="normal" if on_clear_photo else "disabled")
+
+    def _handle_pick_photo(self):
+        if self._on_pick_photo:
+            self._on_pick_photo()
+
+    def _handle_capture_photo(self):
+        if self._on_capture_photo:
+            self._on_capture_photo()
+
+    def _handle_clear_photo(self):
+        if self._on_clear_photo:
+            self._on_clear_photo()
+
+    def _get_photo_target_size(self):
+        """Obtiene ancho/alto interno del cuadro de foto para cubrirlo completo."""
+        self.foto_container.update_idletasks()
+
+        # Primero intentar tamaño real renderizado.
+        target_w = int(self.foto_container.winfo_width())
+        target_h = int(self.foto_container.winfo_height())
+
+        # Fallback a tamaño configurado si el widget aun no fue calculado.
+        if target_w <= 1:
+            target_w = int(float(self.foto_container.cget("width")))
+        if target_h <= 1:
+            target_h = int(float(self.foto_container.cget("height")))
+
+        # Descontar borde para cubrir el area interna visible.
+        border_width = int(float(self.foto_container.cget("border_width") or 0))
+        target_w = max(1, target_w - (border_width * 2))
+        target_h = max(1, target_h - (border_width * 2))
+        return target_w, target_h
+
+    def set_photo_image(self, image: Image.Image):
+        """Renderiza una imagen en el placeholder de foto."""
+        target_w, target_h = self._get_photo_target_size()
+        preview = image.copy().convert("RGB")
+
+        src_w, src_h = preview.size
+        if src_w <= 0 or src_h <= 0:
+            return
+
+        target_ratio = target_w / target_h
+        src_ratio = src_w / src_h
+
+        # Escalado tipo "cover": llena todo el cuadro y recorta centrado.
+        if src_ratio > target_ratio:
+            new_h = target_h
+            new_w = int(new_h * src_ratio)
+        else:
+            new_w = target_w
+            new_h = int(new_w / src_ratio)
+
+        resized = preview.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        left = max(0, (new_w - target_w) // 2)
+        top = max(0, (new_h - target_h) // 2)
+        covered = resized.crop((left, top, left + target_w, top + target_h))
+
+        self._photo_image = ctk.CTkImage(light_image=covered, size=(target_w, target_h))
+        self.lbl_photo.configure(image=self._photo_image, text="")
+
+    def clear_photo(self):
+        """Restaura el placeholder sin foto."""
+        # En algunos casos Tk puede conservar una referencia rota a un pyimage.
+        # Limpiamos el image del label interno primero y, si falla, recreamos el widget.
+        if not hasattr(self, "lbl_photo"):
+            self._photo_image = None
+            return
+
+        try:
+            if self.lbl_photo.winfo_exists():
+                inner_label = getattr(self.lbl_photo, "_label", None)
+                if inner_label is not None:
+                    inner_label.configure(image="")
+                self.lbl_photo.configure(image=None, text="👤")
+        except tk.TclError:
+            try:
+                if self.lbl_photo.winfo_exists():
+                    self.lbl_photo.destroy()
+            except tk.TclError:
+                pass
+
+            self.lbl_photo = ctk.CTkLabel(
+                self.foto_container,
+                text="👤",
+                font=ctk.CTkFont(size=40),
+            )
+            self.lbl_photo.place(relx=0, rely=0, relwidth=1, relheight=1)
+        finally:
+            self._photo_image = None
+
     def update_data(self, nombre_completo: str, dni: str, carrera: str, grupo: str, modalidad: str, nivel: str = None, grado: str = None):
         """Actualizar datos del carnet"""""
         if nombre_completo:
@@ -205,3 +362,4 @@ class StudentPreviewCard(ctk.CTkFrame):
         self.lbl_nivel_preview.configure(text="-")
         self.lbl_grado_preview.configure(text="")
         self.fr_nivel_badge.pack_forget()
+        self.clear_photo()

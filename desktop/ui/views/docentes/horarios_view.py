@@ -7,12 +7,16 @@ Flujo: Seleccionar Aula → Gestionar horario de esa aula por grupo
 import customtkinter as ctk
 from tkinter import messagebox
 from customtkinter import CTkFont
+import threading
 
 from controllers.academico_controller import AcademicoController
 from controllers.docentes_controller import DocentesController
 from controllers.aulas_controller import AulasController
 from ui.views.docentes.dialogo_horario import DialogoHorario
 from core.theme_manager import ThemeManager as TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 _COLOR_MODALIDAD = {
     "COLEGIO":   "#3498db",
@@ -21,6 +25,8 @@ _COLOR_MODALIDAD = {
     "TALLER":    "#e67e22",
     "AUDITORIO": "#16a085",
 }
+
+_SLOT_ROW_HEIGHT = 60
 
 
 class HorariosView(ctk.CTkFrame):
@@ -37,27 +43,64 @@ class HorariosView(ctk.CTkFrame):
     def __init__(self, parent, auth_client=None):
         super().__init__(parent, fg_color="transparent")
 
-        self.controller          = AcademicoController(auth_client.token if auth_client else "")
-        self.docentes_controller = DocentesController(auth_client.token if auth_client else "")
-        self.aulas_controller    = AulasController(auth_client.token if auth_client else "")
+        self._auth_token = auth_client.token if auth_client else ""
+        self.controller = None
+        self.docentes_controller = None
+        self.aulas_controller = None
 
         # ── Estado ────────────────────────────────────────────
         self.aula_seleccionada: dict | None = None
         self.grupo_actual   = "A"
-        self.turno_actual   = "MAÑANA"
+        self.turno_actual   = "MANANA"
         self.periodo_actual = "2026-I"
         self.horario_data: dict = {}
+        self.bloques_dinamicos: list = []
         self.todas_las_aulas: list = []
+        self._aulas_request_id = 0
+        self._horario_request_id = 0
+        self._ui_ready = False
+        self._loading_frame = None
 
         # ── Layout 33 / 67 ────────────────────────────────────
         self.grid_columnconfigure(0, weight=15, minsize=280)
         self.grid_columnconfigure(1, weight=85)
         self.grid_rowconfigure(0, weight=1)
 
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Renderiza un placeholder liviano antes de construir toda la vista."""
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando gestion de horarios...",
+            font=CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye la UI y dispara cargas remotas fuera del constructor."""
+        if self._ui_ready:
+            return
+
+        # Inicializacion perezosa: evita costo de crear clientes HTTP en show_view.
+        if self.controller is None:
+            self.controller = AcademicoController(self._auth_token)
+        if self.docentes_controller is None:
+            self.docentes_controller = DocentesController(self._auth_token)
+        if self.aulas_controller is None:
+            self.aulas_controller = AulasController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+
         self._crear_panel_aulas()
         self._crear_panel_horario()
-
-        self.cargar_aulas()
+        self._cargar_aulas_async()
+        self._ui_ready = True
 
     # ═══════════════════════════════════════════════════════════
     #  PANEL IZQUIERDO – SELECTOR DE AULAS
@@ -229,10 +272,21 @@ class HorariosView(ctk.CTkFrame):
             command=self._cambiar_filtro,
             state="disabled"
         )
-        self.cb_turno.set(self.turno_actual)
+        self.cb_turno.set("MAÑANA")
         self.cb_turno.pack(side="left")
 
-        # Derecha: actualizar
+        # Derecha: acciones
+        ctk.CTkButton(
+            cnt,
+            text="🧩 Nuevo Bloque",
+            fg_color=TM.primary(),
+            hover_color="#2980b9",
+            width=130, height=36,
+            corner_radius=8,
+            font=CTkFont(family="Roboto", size=12, weight="bold"),
+            command=self._abrir_dialogo_bloque_personalizado,
+        ).pack(side="right", padx=(0, 8))
+
         ctk.CTkButton(
             cnt,
             text="🔄 Actualizar",
@@ -267,76 +321,371 @@ class HorariosView(ctk.CTkFrame):
             text_color=TM.text_secondary()
         ).pack(side="left", padx=(5, 0))
 
-    def _crear_celda(self, parent, dia_num: int, h_ini: str, h_fin: str) -> ctk.CTkFrame:
-        slot_key = f"{h_ini}-{h_fin}"
-        clase = self.horario_data.get(dia_num, {}).get(slot_key)
-        return (
-            self._celda_con_clase(parent, clase)
-            if clase else
-            self._celda_vacia(parent, dia_num, h_ini, h_fin)
-        )
+    def _crear_celda(self, parent, bloque: dict | None, dia_num: int, h_ini: str, h_fin: str) -> ctk.CTkFrame:
+        if not bloque:
+            return self._celda_vacia(parent, dia_num, h_ini, h_fin)
+
+        tipo = (bloque.get("tipo_bloque") or "CLASE").upper()
+        if tipo == "CLASE":
+            if bloque.get("id") or bloque.get("curso_id") or bloque.get("curso_nombre"):
+                return self._celda_con_clase(parent, bloque)
+            return self._celda_clase_sin_asignar(parent, bloque)
+        if tipo == "RECREO":
+            return self._celda_tipo_bloque(parent, bloque, "☕", "RECREO", "#7f5a00")
+        return self._celda_tipo_bloque(parent, bloque, "🟫", "LIBRE", "#4a4a4a")
+
+    def _materia_color(self, nombre_curso: str) -> str:
+        palette = [
+            "#4F8CFF", "#00B894", "#F4B400", "#E17055", "#A66CFF", "#00A8CC", "#D63031",
+        ]
+        base = (nombre_curso or "Clase").strip().lower()
+        idx = sum(ord(ch) for ch in base) % len(palette)
+        return palette[idx]
+
+    def _is_descendant_widget(self, widget, ancestor) -> bool:
+        if widget is None or ancestor is None:
+            return False
+        current = widget
+        while current is not None:
+            if current == ancestor:
+                return True
+            try:
+                parent_name = current.winfo_parent()
+                if not parent_name:
+                    break
+                current = current.nametowidget(parent_name)
+            except Exception:
+                break
+        return False
+
+    def _wire_hover_actions(self, celda, actions_frame) -> None:
+        state = {"hide_job": None}
+
+        def show_actions(_event=None):
+            if state["hide_job"] is not None:
+                try:
+                    celda.after_cancel(state["hide_job"])
+                except Exception:
+                    pass
+                state["hide_job"] = None
+            actions_frame.place(in_=celda, relx=1.0, x=-8, y=8, anchor="ne")
+
+        def hide_actions(_event=None):
+            def _do_hide():
+                x = celda.winfo_pointerx()
+                y = celda.winfo_pointery()
+                hovered = celda.winfo_containing(x, y)
+                if not self._is_descendant_widget(hovered, celda):
+                    actions_frame.place_forget()
+
+            state["hide_job"] = celda.after(120, _do_hide)
+
+        def _bind_recursive(widget):
+            widget.bind("<Enter>", show_actions)
+            widget.bind("<Leave>", hide_actions)
+            for child in widget.winfo_children():
+                _bind_recursive(child)
+
+        _bind_recursive(celda)
+        _bind_recursive(actions_frame)
 
     def _celda_con_clase(self, parent, clase: dict) -> ctk.CTkFrame:
+        nombre_curso = clase.get("nombre_curso") or clase.get("curso_nombre") or "Clase"
+        nombre_docente = clase.get("nombre_docente") or clase.get("docente_nombre") or "Sin docente"
+        color_acento = self._materia_color(nombre_curso)
+
         celda = ctk.CTkFrame(
-            parent, fg_color="#1a4d2e", corner_radius=10,
-            border_width=2, border_color=TM.success(), height=100
+            parent,
+            fg_color="#161B22",
+            corner_radius=10,
+            border_width=1,
+            border_color="#2D333B",
+            height=_SLOT_ROW_HEIGHT,
         )
-        fc = ctk.CTkFrame(celda, fg_color="transparent")
-        fc.pack(expand=True, fill="both", padx=10, pady=8)
+        celda.grid_propagate(False)
+        celda.pack_propagate(False)
+
+        # Borde izquierdo grueso con color representativo de la materia
+        barra = ctk.CTkFrame(celda, fg_color=color_acento, width=4, corner_radius=0)
+        barra.pack(side="left", fill="y")
+
+        cuerpo = ctk.CTkFrame(celda, fg_color="#1C2128", corner_radius=8)
+        cuerpo.pack(side="left", fill="both", expand=True, padx=(0, 0), pady=0)
+        cuerpo.pack_propagate(False)
+
+        # Contenido alineado arriba con padding uniforme
+        fc = ctk.CTkFrame(cuerpo, fg_color="transparent")
+        fc.pack(fill="both", expand=True, padx=5, pady=5, anchor="n")
 
         ctk.CTkLabel(
-            fc, text=clase["nombre_curso"],
-            font=CTkFont(family="Roboto", size=11, weight="bold"),
-            text_color="white", wraplength=145
-        ).pack()
+            fc, text=nombre_curso,
+            font=CTkFont(family="Roboto", size=10, weight="bold"),
+            text_color="#F0F6FC", wraplength=145,
+            justify="left", anchor="w"
+        ).pack(fill="x", anchor="nw")
 
-        doc_txt = clase.get("nombre_docente") or "Sin docente"
         ctk.CTkLabel(
-            fc, text=f"👤 {doc_txt}",
+            fc, text=f"👤 {nombre_docente}",
+            font=CTkFont(family="Roboto", size=7),
+            text_color="#9DA7B3",
+            justify="left", anchor="w"
+        ).pack(fill="x", anchor="nw", pady=(0, 0))
+
+        # Acciones pequeñas, solo visibles en hover
+        fr_btns = ctk.CTkFrame(celda, fg_color="transparent")
+        fr_btns.place_forget()
+
+        ctk.CTkButton(
+            fr_btns,
+            text="✏",
+            width=20,
+            height=20,
+            fg_color="#2D333B",
+            hover_color="#3A414A",
+            corner_radius=5,
+            border_width=1,
+            border_color="#4A525C",
             font=CTkFont(family="Roboto", size=9),
-            text_color="#bdc3c7"
-        ).pack(pady=(2, 0))
-
-        fr_btns = ctk.CTkFrame(fc, fg_color="transparent")
-        fr_btns.pack(pady=(4, 0))
-
-        ctk.CTkButton(
-            fr_btns, text="✏️", width=30, height=24,
-            fg_color=TM.warning(), hover_color="#d35400", corner_radius=6,
-            font=CTkFont(family="Arial", size=10),
+            text_color="#D0D7DE",
             command=lambda c=clase: self._editar_bloque(c)
-        ).pack(side="left", padx=2)
+        ).pack(side="left", padx=(0, 4))
 
         ctk.CTkButton(
-            fr_btns, text="❌", width=30, height=24,
-            fg_color=TM.danger(), hover_color="#c0392b", corner_radius=6,
-            font=CTkFont(family="Arial", size=10),
+            fr_btns,
+            text="🗑",
+            width=20,
+            height=20,
+            fg_color="#2D333B",
+            hover_color="#4A2A2A",
+            corner_radius=5,
+            border_width=1,
+            border_color="#5A3636",
+            font=CTkFont(family="Roboto", size=8),
+            text_color="#FFB3B3",
             command=lambda c=clase: self._eliminar_bloque(c)
+        ).pack(side="left")
+
+        self._wire_hover_actions(celda, fr_btns)
+
+        return celda
+
+    def _celda_clase_sin_asignar(self, parent, bloque: dict) -> ctk.CTkFrame:
+        celda = ctk.CTkFrame(
+            parent, fg_color="#2d3e50", corner_radius=10,
+            border_width=1, border_color="#4a6b8a", height=_SLOT_ROW_HEIGHT
+        )
+        celda.grid_propagate(False)
+        celda.pack_propagate(False)
+
+        ctk.CTkLabel(
+            celda,
+            text="📘 CLASE\nSin asignar", 
+            font=CTkFont(family="Roboto", size=8, weight="bold"),
+            text_color="#d6eaf8",
+            justify="center",
+        ).pack(pady=(5, 1))
+
+        fr_btns = ctk.CTkFrame(celda, fg_color="transparent")
+        fr_btns.pack(pady=(0, 4))
+
+        ctk.CTkButton(
+            fr_btns,
+            text="➕ Clase",
+            width=78,
+            height=20,
+            fg_color=TM.primary(),
+            hover_color="#2980b9",
+            corner_radius=6,
+            font=CTkFont(family="Roboto", size=8, weight="bold"),
+            command=lambda b=bloque: self._asignar_clase_en_bloque(b),
         ).pack(side="left", padx=2)
 
+        if bloque.get("plantilla_bloque_id"):
+            ctk.CTkButton(
+                fr_btns,
+                text="❌",
+                width=28,
+                height=24,
+                fg_color=TM.danger(),
+                hover_color="#c0392b",
+                corner_radius=6,
+                font=CTkFont(family="Arial", size=10),
+                command=lambda b=bloque: self._eliminar_bloque_plantilla(b),
+            ).pack(side="left", padx=2)
+
+        return celda
+
+    def _celda_tipo_bloque(self, parent, bloque: dict, icono: str, titulo: str, color: str) -> ctk.CTkFrame:
+        celda = ctk.CTkFrame(
+            parent,
+            fg_color=color,
+            corner_radius=10,
+            border_width=1,
+            border_color="#707070",
+            height=_SLOT_ROW_HEIGHT,
+        )
+        etiqueta = (bloque.get("etiqueta") or "").strip()
+        texto = f"{icono} {titulo}" if not etiqueta else f"{icono} {titulo}\n{etiqueta}"
+        ctk.CTkLabel(
+            celda,
+            text=texto,
+            font=CTkFont(family="Roboto", size=8, weight="bold"),
+            text_color="white",
+            justify="center",
+            wraplength=120,
+        ).pack(expand=True, fill="both", padx=5, pady=(4, 1))
+
+        if bloque.get("plantilla_bloque_id"):
+            ctk.CTkButton(
+                celda,
+                text="❌",
+                width=28,
+                height=22,
+                fg_color="#8b1a1a",
+                hover_color="#aa2a2a",
+                corner_radius=6,
+                font=CTkFont(family="Arial", size=10),
+                command=lambda b=bloque: self._eliminar_bloque_plantilla(b),
+            ).pack(pady=(0, 6))
         return celda
 
     def _celda_vacia(self, parent, dia_num: int, h_ini: str, h_fin: str) -> ctk.CTkFrame:
         celda = ctk.CTkFrame(
-            parent, fg_color="#2d2d2d", corner_radius=10,
-            border_width=1, border_color="#404040", height=100
+            parent,
+            fg_color="#161B22",
+            corner_radius=10,
+            border_width=1,
+            border_color="#2D333B",
+            height=_SLOT_ROW_HEIGHT,
         )
-        ctk.CTkButton(
-            celda, text="➕\nAgregar",
-            fg_color="transparent", text_color="#7f8c8d", hover_color="#404040",
-            font=CTkFont(family="Roboto", size=10),
-            command=lambda: self._agregar_en_slot(dia_num, h_ini, h_fin)
-        ).pack(expand=True, fill="both")
+
+        btn = ctk.CTkButton(
+            celda,
+            text="",
+            fg_color="transparent",
+            hover_color="#1C2128",
+            corner_radius=10,
+            command=lambda: self._agregar_en_slot(dia_num, h_ini, h_fin),
+        )
+        btn.pack(expand=True, fill="both")
+
+        lbl_plus = ctk.CTkLabel(
+            celda,
+            text="",
+            font=CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color="#6E7681",
+        )
+        lbl_plus.place(relx=0.5, rely=0.5, anchor="center")
+
+        def _hover_on(_event=None):
+            celda.configure(border_color="#4B5563")
+            lbl_plus.configure(text="+")
+
+        def _hover_off(_event=None):
+            celda.configure(border_color="#2D333B")
+            lbl_plus.configure(text="")
+
+        for w in (celda, btn):
+            w.bind("<Enter>", _hover_on)
+            w.bind("<Leave>", _hover_off)
+
         return celda
+
+    def _parse_hhmm_to_minutes(self, hhmm: str) -> int:
+        try:
+            parts = (hhmm or "").strip().split(":")
+            if len(parts) < 2:
+                return 0
+            hh, mm = parts[0], parts[1]
+            return int(hh) * 60 + int(mm)
+        except Exception:
+            return 0
+
+    def _calcular_row_span(self, start_min: int, end_min: int, interval_minutes: int) -> int:
+        """
+        Evita que pequeñas desviaciones (ej. 61-65 min) se rendericen como 2 filas.
+        Una clase de 1 hora debe verse como 1 bloque.
+        """
+        duracion = max(1, end_min - start_min)
+        tolerancia_min = 5
+        if duracion <= interval_minutes + tolerancia_min:
+            return 1
+        return max(1, (duracion + interval_minutes - 1) // interval_minutes)
+
+    def _format_minutes_to_hhmm(self, total_minutes: int) -> str:
+        hh = max(total_minutes, 0) // 60
+        mm = max(total_minutes, 0) % 60
+        return f"{hh:02d}:{mm:02d}"
+
+    def _build_fixed_time_axis(self, bloques: list[dict], interval_minutes: int = 60) -> list[tuple[str, str]]:
+        """
+        Genera eje de tiempo fijo e inmutable.
+        Si hay datos, usa min/max de bloques redondeados al intervalo.
+        Si no hay datos, usa un rango por defecto de 07:00 a 19:00.
+        """
+        if not bloques:
+            start_min = 7 * 60
+            end_min = 19 * 60
+        else:
+            starts = [self._parse_hhmm_to_minutes(b.get("hora_inicio", "")) for b in bloques if b.get("hora_inicio")]
+            ends = [self._parse_hhmm_to_minutes(b.get("hora_fin", "")) for b in bloques if b.get("hora_fin")]
+            if not starts or not ends:
+                start_min = 7 * 60
+                end_min = 19 * 60
+            else:
+                raw_start = min(starts)
+                raw_end = max(ends)
+                start_min = (raw_start // interval_minutes) * interval_minutes
+                end_min = ((raw_end + interval_minutes - 1) // interval_minutes) * interval_minutes
+                if end_min <= start_min:
+                    end_min = start_min + interval_minutes
+
+        slots: list[tuple[str, str]] = []
+        for t in range(start_min, end_min, interval_minutes):
+            slots.append((self._format_minutes_to_hhmm(t), self._format_minutes_to_hhmm(t + interval_minutes)))
+        return slots
 
     # ═══════════════════════════════════════════════════════════
     #  CARGA Y FILTRADO DE AULAS
     # ═══════════════════════════════════════════════════════════
 
-    def cargar_aulas(self):
-        """Carga todas las aulas activas desde la API."""
-        self.todas_las_aulas = self.aulas_controller.listar(activo=True)
+    def _cargar_aulas_async(self):
+        """Carga aulas en background thread."""
+        self._aulas_request_id += 1
+        req_id = self._aulas_request_id
+
+        for w in self.scroll_aulas.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self.scroll_aulas,
+            text="⏳ Cargando aulas...",
+            font=CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        ).pack(pady=20)
+
+        def _hilo():
+            try:
+                aulas = self.aulas_controller.listar(activo=True)
+            except Exception as exc:
+                if self.winfo_exists() and req_id == self._aulas_request_id:
+                    self.after(0, lambda: self._aplicar_aulas([]))
+                logger.error(f"Error cargando aulas: {exc}")
+                return
+
+            if self.winfo_exists() and req_id == self._aulas_request_id:
+                self.after(0, lambda: self._aplicar_aulas(aulas))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_aulas(self, aulas):
+        if not self.winfo_exists():
+            return
+        self.todas_las_aulas = aulas
         self._filtrar_aulas()
+
+    def cargar_aulas(self):
+        """Public method - delegates to async."""
+        self._cargar_aulas_async()
 
     def _filtrar_aulas(self, event=None):
         txt = self.entry_buscar_aula.get().lower()
@@ -452,6 +801,7 @@ class HorariosView(ctk.CTkFrame):
         grupos = aula.get("grupos") or ["A", "B", "C", "D"]
         self.cb_grupo.configure(values=grupos, state="normal")
         self.cb_turno.configure(state="normal")
+        self.cb_turno.set("MAÑANA" if self.turno_actual == "MANANA" else "TARDE")
 
         if grupos:
             self.grupo_actual = grupos[0]
@@ -470,17 +820,44 @@ class HorariosView(ctk.CTkFrame):
     # ═══════════════════════════════════════════════════════════
 
     def cargar_horario(self):
-        """Carga el horario del aula seleccionada y reconstruye el grid."""
+        """Carga el horario del aula seleccionada en background."""
         if not self.aula_seleccionada:
             self._mostrar_placeholder()
             return
 
-        exito, msg, datos = self.controller.obtener_horario_aula(
-            aula_id=self.aula_seleccionada["id"],
-            grupo=self.grupo_actual,
-            periodo=self.periodo_actual,
-        )
-        self.horario_data = datos if exito else {}
+        self._horario_request_id += 1
+        req_id = self._horario_request_id
+        aula_id = self.aula_seleccionada["id"]
+        grupo = self.grupo_actual
+        periodo = self.periodo_actual
+        turno = self.turno_actual
+
+        # Loading
+        for w in self.fr_tabla.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self.fr_tabla,
+            text="⏳ Cargando horario...",
+            font=CTkFont(family="Roboto", size=13),
+            text_color=TM.text_secondary()
+        ).pack(pady=60)
+
+        def _hilo():
+            exito, msg, datos = self.controller.obtener_bloques_horario_aula(
+                aula_id=aula_id,
+                grupo=grupo,
+                periodo=periodo,
+                turno=turno,
+            )
+            if self.winfo_exists() and req_id == self._horario_request_id:
+                self.after(0, lambda: self._aplicar_horario(exito, datos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_horario(self, exito, datos):
+        if not self.winfo_exists():
+            return
+        self.bloques_dinamicos = datos if exito else []
         self._construir_grid()
 
     def _mostrar_placeholder(self):
@@ -507,8 +884,41 @@ class HorariosView(ctk.CTkFrame):
         for w in self.fr_tabla.winfo_children():
             w.destroy()
 
-        slots = self.controller.obtener_slots_horarios(self.turno_actual)
+        if not self.bloques_dinamicos:
+            vacio = ctk.CTkFrame(self.fr_tabla, fg_color="transparent")
+            vacio.pack(fill="both", expand=True, pady=60)
+            ctk.CTkLabel(
+                vacio,
+                text="🧩",
+                font=CTkFont(family="Arial", size=42),
+            ).pack(pady=(0, 8))
+            ctk.CTkLabel(
+                vacio,
+                text="No hay bloques configurados para este grupo/turno",
+                font=CTkFont(family="Roboto", size=13, weight="bold"),
+                text_color=TM.text(),
+            ).pack()
+            ctk.CTkButton(
+                vacio,
+                text="➕ Crear primer bloque",
+                fg_color=TM.primary(),
+                hover_color="#2980b9",
+                font=CTkFont(family="Roboto", size=12, weight="bold"),
+                command=self._abrir_dialogo_bloque_personalizado,
+            ).pack(pady=(14, 0))
+            return
+
+        # Eje fijo de tiempo: filas regulares de 1 hora
+        interval_minutes = 60
+        slots = self._build_fixed_time_axis(self.bloques_dinamicos, interval_minutes=interval_minutes)
         dias  = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+
+        if not slots:
+            self._mostrar_placeholder()
+            return
+
+        axis_start_min = self._parse_hhmm_to_minutes(slots[0][0])
+        total_rows = len(slots)
 
         tabla = ctk.CTkFrame(self.fr_tabla, fg_color="transparent")
         tabla.pack(fill="both", expand=True, padx=5, pady=5)
@@ -533,26 +943,65 @@ class HorariosView(ctk.CTkFrame):
             ).grid(row=0, column=col, sticky="nsew", padx=2, pady=2)
 
         for fila, (h_ini, h_fin) in enumerate(slots, start=1):
-            es_recreo = h_ini in ("11:00", "17:00") and h_fin in ("11:30", "17:30")
-            texto_hora = "☕\nRECREO" if es_recreo else f"{h_ini}\n{h_fin}"
-            color_hora = "#34495e"   if es_recreo else TM.bg_card()
+            texto_hora = f"{h_ini}\n{h_fin}"
+            color_hora = TM.bg_card()
 
             ctk.CTkLabel(
                 tabla, text=texto_hora,
                 font=CTkFont(family="Roboto", size=10, weight="bold"),
-                fg_color=color_hora, corner_radius=8, height=100
+                fg_color=color_hora, corner_radius=8, height=_SLOT_ROW_HEIGHT
             ).grid(row=fila, column=0, sticky="nsew", padx=2, pady=2)
 
             for col, _ in enumerate(dias, start=1):
-                if es_recreo:
-                    ctk.CTkLabel(
-                        tabla, text="☕",
-                        font=CTkFont(family="Arial", size=28),
-                        fg_color="#34495e", corner_radius=8, height=100
-                    ).grid(row=fila, column=col, sticky="nsew", padx=2, pady=2)
-                else:
-                    celda = self._crear_celda(tabla, col, h_ini, h_fin)
-                    celda.grid(row=fila, column=col, sticky="nsew", padx=2, pady=2)
+                # Fondo inmutable de la cuadrícula por slot horario
+                celda = self._celda_vacia(tabla, col, h_ini, h_fin)
+                celda.grid(row=fila, column=col, sticky="nsew", padx=2, pady=2)
+
+        # Overlay de bloques con spanning vertical (rowspan)
+        bloques_sorted = sorted(
+            self.bloques_dinamicos,
+            key=lambda b: (
+                b.get("dia_semana", 0),
+                self._parse_hhmm_to_minutes(b.get("hora_inicio", "")),
+                self._parse_hhmm_to_minutes(b.get("hora_fin", "")),
+            ),
+        )
+
+        for bloque in bloques_sorted:
+            dia = int(bloque.get("dia_semana") or 0)
+            if dia < 1 or dia > 6:
+                continue
+
+            start_min = self._parse_hhmm_to_minutes(bloque.get("hora_inicio", ""))
+            end_min = self._parse_hhmm_to_minutes(bloque.get("hora_fin", ""))
+            if end_min <= start_min:
+                continue
+
+            row_index = max(0, (start_min - axis_start_min) // interval_minutes)
+            row_span = self._calcular_row_span(start_min, end_min, interval_minutes)
+
+            if row_index >= total_rows:
+                continue
+            if row_index + row_span > total_rows:
+                row_span = total_rows - row_index
+            if row_span <= 0:
+                continue
+
+            celda_bloque = self._crear_celda(
+                tabla,
+                bloque,
+                dia,
+                bloque.get("hora_inicio", ""),
+                bloque.get("hora_fin", ""),
+            )
+            celda_bloque.grid(
+                row=row_index + 1,
+                column=dia,
+                rowspan=row_span,
+                sticky="nsew",
+                padx=2,
+                pady=2,
+            )
 
     # ═══════════════════════════════════════════════════════════
     #  ACCIONES
@@ -560,10 +1009,11 @@ class HorariosView(ctk.CTkFrame):
 
     def _cambiar_filtro(self, event=None):
         self.grupo_actual = self.cb_grupo.get()
-        self.turno_actual = self.cb_turno.get()
+        turno_ui = self.cb_turno.get()
+        self.turno_actual = "MANANA" if turno_ui == "MAÑANA" else "TARDE"
         self.cargar_horario()
 
-    def _agregar_en_slot(self, dia: int, h_ini: str, h_fin: str):
+    def _abrir_dialogo_bloque_personalizado(self, dia: int = 1, h_ini: str = "08:00", h_fin: str = "08:45"):
         if not self.aula_seleccionada:
             messagebox.showwarning("Sin aula", "Selecciona un aula primero.")
             return
@@ -581,35 +1031,51 @@ class HorariosView(ctk.CTkFrame):
             periodo=self.periodo_actual,
             aula_nombre=self.aula_seleccionada["nombre"],
             aula_id=self.aula_seleccionada["id"],
+            modo_plantilla=True,
         )
         self.wait_window(dialogo)
         if dialogo.guardado:
-            # Actualización optimista: mostrar la clase al instante sin esperar la API
-            slot_key = f"{h_ini}-{h_fin}"
-            if dia not in self.horario_data:
-                self.horario_data[dia] = {}
-            self.horario_data[dia][slot_key] = {
-                "id":             dialogo.nuevo_id,
-                "nombre_curso":   dialogo.curso_nombre_guardado,
-                "nombre_docente": dialogo.docente_nombre_guardado,
-                "aula":           dialogo.aula_nombre,
-                "grupo":          self.grupo_actual,
-                "dia":            dia,
-                "hora_inicio":    h_ini,
-                "hora_fin":       h_fin,
-            }
-            self._construir_grid()
+            self.cargar_horario()
+
+    def _agregar_en_slot(self, dia: int, h_ini: str, h_fin: str):
+        self._abrir_dialogo_bloque_personalizado(dia=dia, h_ini=h_ini, h_fin=h_fin)
+
+    def _asignar_clase_en_bloque(self, bloque: dict):
+        if not self.aula_seleccionada:
+            messagebox.showwarning("Sin aula", "Selecciona un aula primero.")
+            return
+
+        dialogo = DialogoHorario(
+            self,
+            self.controller,
+            self.docentes_controller,
+            self.controller,
+            grupo=self.grupo_actual,
+            dia=bloque.get("dia_semana", 1),
+            hora_inicio=bloque.get("hora_inicio", ""),
+            hora_fin=bloque.get("hora_fin", ""),
+            turno=self.turno_actual,
+            periodo=self.periodo_actual,
+            aula_nombre=self.aula_seleccionada["nombre"],
+            aula_id=self.aula_seleccionada["id"],
+            plantilla_bloque_id=bloque.get("plantilla_bloque_id"),
+        )
+        self.wait_window(dialogo)
+        if dialogo.guardado:
+            self.cargar_horario()
 
     def _editar_bloque(self, clase: dict):
+        nombre_curso = clase.get("nombre_curso") or clase.get("curso_nombre") or "Clase"
         messagebox.showinfo(
             "Editar bloque",
-            f"Edición de «{clase['nombre_curso']}» — próximamente."
+            f"Edición de «{nombre_curso}» — próximamente."
         )
 
     def _eliminar_bloque(self, clase: dict):
+        nombre_curso = clase.get("nombre_curso") or clase.get("curso_nombre") or "Clase"
         if not messagebox.askyesno(
             "Confirmar eliminación",
-            f"¿Eliminar «{clase['nombre_curso']}» del horario?\n"
+            f"¿Eliminar «{nombre_curso}» del horario?\n"
             f"{clase.get('hora_inicio', '')} – {clase.get('hora_fin', '')}"
         ):
             return
@@ -621,8 +1087,42 @@ class HorariosView(ctk.CTkFrame):
         else:
             messagebox.showerror("Error", msg)
 
+    def _eliminar_bloque_plantilla(self, bloque: dict):
+        bloque_id = bloque.get("plantilla_bloque_id")
+        if not bloque_id:
+            messagebox.showwarning("Accion no valida", "Este bloque no pertenece a una plantilla editable.")
+            return
+
+        tipo = bloque.get("tipo_bloque", "BLOQUE")
+        if not messagebox.askyesno(
+            "Confirmar eliminación",
+            f"¿Eliminar bloque {tipo} {bloque.get('hora_inicio', '')}-{bloque.get('hora_fin', '')}?",
+        ):
+            return
+
+        exito, msg = self.controller.eliminar_bloque_plantilla(bloque_id)
+        if exito:
+            messagebox.showinfo("Listo", "Bloque de plantilla eliminado.")
+            self.cargar_horario()
+        else:
+            messagebox.showerror("Error", msg)
+
     def refresh(self):
         """Llamado por main_window al mostrar esta vista."""
-        self.cargar_aulas()
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+            return
+
+        self._cargar_aulas_async()
         if self.aula_seleccionada:
             self.cargar_horario()
+
+    def on_show(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        pass

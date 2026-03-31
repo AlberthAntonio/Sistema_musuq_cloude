@@ -5,6 +5,7 @@ Sistema Musuq Cloud
 
 import customtkinter as ctk
 from typing import Dict, Optional, Type
+import logging
 from datetime import datetime
 
 from core.config import Config
@@ -13,6 +14,9 @@ from core.auth_manager import AuthManager
 from core.theme_manager import ThemeManager as TM
 
 from ui.components.nav_button import NavButton, SubMenuButton
+from utils.perf_utils import profiler, get_logger
+
+logger = get_logger(__name__)
 
 
 class MainWindow(ctk.CTkFrame):
@@ -29,6 +33,7 @@ class MainWindow(ctk.CTkFrame):
         # Cache de vistas
         self.views_cache: Dict[str, ctk.CTkFrame] = {}
         self.current_view: Optional[ctk.CTkFrame] = None
+        self.current_view_key: Optional[str] = None
         self.nav_buttons: Dict[str, NavButton] = {}
         self.submenus: Dict[str, ctk.CTkFrame] = {}
         
@@ -307,32 +312,63 @@ class MainWindow(ctk.CTkFrame):
         for widget in self.content_area.winfo_children():
             widget.pack_forget()
     
+    def _notify_hide(self):
+        """Notificar a la vista actual que será ocultada (ciclo de vida)"""
+        if self.current_view is not None:
+            try:
+                if hasattr(self.current_view, 'on_hide'):
+                    self.current_view.on_hide()
+            except Exception as e:
+                logger.warning(f"Error en on_hide de '{self.current_view_key}': {e}")
+    
+    def _notify_show(self, view, view_key: str):
+        """Notificar a la vista que será mostrada (ciclo de vida)"""
+        try:
+            if hasattr(view, 'on_show'):
+                view.on_show()
+        except Exception as e:
+            logger.warning(f"Error en on_show de '{view_key}': {e}")
+    
     def show_view(self, view_class: Type, view_key: str, *args, **kwargs):
-        """Mostrar una vista (con caché)"""
+        """Mostrar una vista (con caché y ciclo de vida)"""
+        profiler.start(view_key, "show_view")
+        
+        # Notificar on_hide a la vista actual antes de ocultarla
+        self._notify_hide()
+        
         self.clear_content()
         
         is_new = view_key not in self.views_cache
         if is_new:
             try:
+                profiler.start(view_key, "create")
                 self.views_cache[view_key] = view_class(
                     self.content_area,
                     self.auth_client,
                     *args,
                     **kwargs
                 )
+                profiler.stop(view_key, "create")
             except Exception as e:
-                print(f"Error cargando vista {view_key}: {e}")
+                profiler.stop(view_key, "create")
+                logger.error(f"Error cargando vista {view_key}: {e}")
                 import traceback
                 traceback.print_exc()
                 self.show_placeholder(f"Error: {e}")
                 return
         
         self.current_view = self.views_cache[view_key]
+        self.current_view_key = view_key
         self.current_view.pack(fill="both", expand=True)
+        
+        # Notificar on_show a la nueva vista
+        self._notify_show(self.current_view, view_key)
         
         # Refrescar solo si la vista ya estaba cacheada (evita doble carga en primer acceso)
         if not is_new and hasattr(self.current_view, 'refresh'):
             self.current_view.refresh()
+        
+        profiler.stop(view_key, "show_view")
     
     def show_placeholder(self, text: str):
         """Mostrar placeholder para vistas no implementadas"""
@@ -553,6 +589,21 @@ class MainWindow(ctk.CTkFrame):
         )
         
         if result:
+            # Cleanup de todas las vistas cacheadas (ciclo de vida)
+            self._notify_hide()  # on_hide de la vista actual
+            for vk, view in self.views_cache.items():
+                try:
+                    if hasattr(view, 'cleanup'):
+                        view.cleanup()
+                except Exception as e:
+                    logger.warning(f"Error en cleanup de '{vk}': {e}")
+            self.views_cache.clear()
+            self.current_view = None
+            self.current_view_key = None
+            
+            # Log reporte de rendimiento antes de salir
+            logger.info(profiler.report())
+            
             self.auth_manager.clear_session()
             self.destroy()
             

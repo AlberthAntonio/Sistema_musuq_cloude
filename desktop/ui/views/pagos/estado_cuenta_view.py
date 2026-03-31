@@ -7,10 +7,14 @@ Documento de estado de cuenta con búsqueda y visualización tipo papel
 import customtkinter as ctk
 from tkinter import messagebox
 from customtkinter import CTkFont
+import threading
 
 from controllers.pagos_controller import PagosController
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class EstadoCuentaView(ctk.CTkFrame):
@@ -26,12 +30,45 @@ class EstadoCuentaView(ctk.CTkFrame):
             raise ValueError("auth_client es requerido para inicializar EstadoCuentaView")
 
         self.auth_client = auth_client
-        self.controller = PagosController(auth_client.token)
+        self._auth_token = auth_client.token
+        self.controller = None
         self.alumno_seleccionado_id = None
-        self._debounce_timer = None  # Timer para debounce
+        self._debounce_timer = None
+        self._request_id = 0  # Contador monótono para descartar respuestas viejas
+        self._ui_ready = False
+        self._loading_frame = None
+
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder inicial mientras se construye la vista completa."""
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando estado de cuenta...",
+            font=CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye UI y dispara búsqueda inicial fuera del constructor."""
+        if self._ui_ready:
+            return
+
+        if self.controller is None:
+            self.controller = PagosController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
 
         self.crear_ui()
         self.buscar()
+        self._ui_ready = True
 
     def crear_ui(self):
         """Crear interfaz completa"""
@@ -409,20 +446,42 @@ class EstadoCuentaView(ctk.CTkFrame):
         self._debounce_timer = self.after(500, self._ejecutar_busqueda)
 
     def _ejecutar_busqueda(self):
-        """Ejecuta la búsqueda real"""
+        """Ejecuta la búsqueda en background thread"""
         criterio = self.entry_busqueda.get()
+        self._request_id += 1
+        req_id = self._request_id
 
-        # Limpiar lista
+        # Limpiar lista y mostrar loading
         for item in self.scroll_lista.winfo_children():
             item.destroy()
 
-        resultados = self.controller.buscar_alumno(criterio)
+        lbl_loading = ctk.CTkLabel(
+            self.scroll_lista,
+            text="⏳ Buscando...",
+            font=CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        )
+        lbl_loading.pack(pady=20)
+
+        def _hilo():
+            resultados = self.controller.buscar_alumno(criterio)
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._mostrar_resultados_busqueda(resultados))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _mostrar_resultados_busqueda(self, resultados):
+        """Actualizar UI con resultados (hilo principal)"""
+        if not self.winfo_exists():
+            return
+
+        for item in self.scroll_lista.winfo_children():
+            item.destroy()
 
         if not resultados:
             self._mostrar_sin_resultados()
             return
 
-        # Mostrar resultados
         for alu in resultados:
             self._crear_item_resultado(alu)
 
@@ -490,11 +549,25 @@ class EstadoCuentaView(ctk.CTkFrame):
         btn.pack(fill="x")
 
     def cargar_estado_cuenta(self, id_alumno):
-        """Cargar estado de cuenta del alumno"""
+        """Cargar estado de cuenta del alumno en background thread"""
         self.alumno_seleccionado_id = id_alumno
-        datos = self.controller.obtener_estado_cuenta(id_alumno)
+        self._request_id += 1
+        req_id = self._request_id
 
-        if not datos:
+        # Mostrar loading
+        self.lbl_nombre.configure(text="⏳ Cargando...")
+        self.lbl_detalles.configure(text="--")
+
+        def _hilo():
+            datos = self.controller.obtener_estado_cuenta(id_alumno)
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._aplicar_estado_cuenta(datos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_estado_cuenta(self, datos):
+        """Aplicar datos a la UI (hilo principal)"""
+        if not self.winfo_exists() or not datos:
             return
 
         # 1. Info Header
@@ -590,3 +663,23 @@ class EstadoCuentaView(ctk.CTkFrame):
             messagebox.showwarning("Advertencia", "Seleccione un alumno primero")
             return
         messagebox.showinfo("Próximamente", "Función de impresión/PDF en desarrollo")
+
+    # ================= CICLO DE VIDA =================
+
+    def on_show(self):
+        """Llamado cuando la vista se hace visible"""
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        """Llamado cuando la vista se oculta"""
+        if self._debounce_timer:
+            try:
+                self.after_cancel(self._debounce_timer)
+            except Exception:
+                pass
+            self._debounce_timer = None
+
+    def cleanup(self):
+        """Limpieza total al destruir (logout)"""
+        self.on_hide()

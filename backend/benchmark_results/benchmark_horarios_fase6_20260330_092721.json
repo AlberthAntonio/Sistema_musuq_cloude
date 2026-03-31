@@ -1,0 +1,88 @@
+{
+  "benchmark_type": "fase6_horarios_endpoints",
+  "timestamp": "2026-03-30T09:27:21.664621",
+  "iterations": 25,
+  "fixture": {
+    "aula_id": 4,
+    "grupo": "G6_1fcc",
+    "periodo": "2026-I",
+    "turno": "MANANA",
+    "plantilla_id": 2,
+    "bloque_id": 2
+  },
+  "results": {
+    "GET /plantillas-horario/": {
+      "iterations": 25,
+      "status_codes_sample": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "errors_5xx": 0,
+      "latency_p50_ms": 4.42,
+      "latency_p95_ms": 5.89,
+      "latency_p99_ms": 7.3,
+      "latency_avg_ms": 4.52,
+      "latency_min_ms": 3.73,
+      "latency_max_ms": 7.68
+    },
+    "GET /plantillas-horario/{id}/bloques": {
+      "iterations": 25,
+      "status_codes_sample": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "errors_5xx": 0,
+      "latency_p50_ms": 4.76,
+      "latency_p95_ms": 6.01,
+      "latency_p99_ms": 6.28,
+      "latency_avg_ms": 4.92,
+      "latency_min_ms": 3.92,
+      "latency_max_ms": 6.36
+    },
+    "GET /plantillas-horario/grilla-final": {
+      "iterations": 25,
+      "status_codes_sample": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "errors_5xx": 0,
+      "latency_p50_ms": 5.87,
+      "latency_p95_ms": 6.49,
+      "latency_p99_ms": 8.6,
+      "latency_avg_ms": 5.92,
+      "latency_min_ms": 5.0,
+      "latency_max_ms": 9.26
+    },
+    "POST /plantillas-horario/{id}/bloques/batch-upsert": {
+      "iterations": 25,
+      "status_codes_sample": [
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "errors_5xx": 0,
+      "latency_p50_ms": 7.45,
+      "latency_p95_ms": 8.98,
+      "latency_p99_ms": 231.25,
+      "latency_avg_ms": 19.16,
+      "latency_min_ms": 6.4,
+      "latency_max_ms": 301.42
+    }
+  },
+  "verifications": {
+    "sin_errores_5xx": true,
+    "errores_5xx_totales": 0,
+    "p95_max_ms": 8.98
+  }
+}

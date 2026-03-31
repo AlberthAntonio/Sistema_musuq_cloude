@@ -47,6 +47,24 @@ class AsistenciaResponse(AsistenciaBase):
         from_attributes = True
 
 
+class AsistenciaListItem(BaseModel):
+    """Esquema reducido para listados. Sin objeto alumno anidado completo."""
+    id: int
+    alumno_id: int
+    fecha: date
+    turno: str
+    estado: str
+    hora: Optional[time] = None
+    alerta_turno: bool = False
+    periodo_id: Optional[int] = None
+    # Datos planos del alumno (evita objeto anidado)
+    alumno_nombre: Optional[str] = None
+    alumno_dni: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class AsistenciaMasiva(BaseModel):
     """Esquema para registro masivo de asistencia."""
     fecha: date

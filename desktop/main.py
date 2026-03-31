@@ -16,6 +16,41 @@ from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
 
 
+def _install_customtkinter_scaling_guard():
+    """Evita crash si CustomTkinter recibe un factor de escala 0."""
+    try:
+        from customtkinter.windows.widgets.scaling.scaling_base_class import CTkScalingBaseClass
+    except Exception:
+        return
+
+    if getattr(CTkScalingBaseClass, "_musuq_scaling_guard_installed", False):
+        return
+
+    original_reverse_widget_scaling = CTkScalingBaseClass._reverse_widget_scaling
+    original_reverse_window_scaling = CTkScalingBaseClass._reverse_window_scaling
+
+    def _safe_reverse_widget_scaling(self, value):
+        try:
+            return original_reverse_widget_scaling(self, value)
+        except ZeroDivisionError:
+            setattr(self, "_CTkScalingBaseClass__widget_scaling", 1.0)
+            return value
+
+    def _safe_reverse_window_scaling(self, value):
+        try:
+            return original_reverse_window_scaling(self, value)
+        except ZeroDivisionError:
+            setattr(self, "_CTkScalingBaseClass__window_scaling", 1.0)
+            return int(value)
+
+    CTkScalingBaseClass._reverse_widget_scaling = _safe_reverse_widget_scaling
+    CTkScalingBaseClass._reverse_window_scaling = _safe_reverse_window_scaling
+    CTkScalingBaseClass._musuq_scaling_guard_installed = True
+
+
+_install_customtkinter_scaling_guard()
+
+
 class MusuqApp(ctk.CTk):
     """Aplicación principal"""
     
@@ -31,6 +66,10 @@ class MusuqApp(ctk.CTk):
         ThemeManager.set_theme("dark")
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
+
+        # Escala base segura para evitar estados transitorios de escala 0.
+        ctk.set_widget_scaling(1.0)
+        ctk.set_window_scaling(1.0)
         
         # Configurar ventana principal (oculta inicialmente)
         self.title(Config.APP_NAME)

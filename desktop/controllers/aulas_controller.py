@@ -10,7 +10,7 @@ class AulasController:
     """Controlador para el módulo de Aulas."""
 
     def __init__(self, auth_token: str):
-        self.client = AulasClient()
+        self.client = AulasClient(load_cached_session=False)
         self.client.token = auth_token
 
     # ─────────────────────────────────────────────

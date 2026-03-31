@@ -5,11 +5,50 @@ Soporta formato JSON (producción) y Pretty (desarrollo).
 import logging
 import json
 import sys
+import contextvars
 from datetime import datetime
 from typing import Any, Dict
 
 from app.core.config import settings
 
+# Global ContextVar para guardar el Request ID de las trazas
+request_id_var = contextvars.ContextVar("request_id", default=None)
+
+_RESERVED_LOG_RECORD_KEYS = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "message",
+    "asctime",
+}
+
+
+def _to_json_safe(value: Any) -> Any:
+    """Convierte valores no serializables en texto para logging JSON."""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _to_json_safe(v) for k, v in value.items()}
+    return str(value)
 
 class JsonFormatter(logging.Formatter):
     """Formateador JSON para logging estructurado en producción."""
@@ -26,7 +65,11 @@ class JsonFormatter(logging.Formatter):
         }
         if record.exc_info:
             log_entry["exception"] = self.formatException(record.exc_info)
-        if hasattr(record, "request_id"):
+            
+        req_id = request_id_var.get()
+        if req_id:
+            log_entry["request_id"] = req_id
+        elif hasattr(record, "request_id"):
             log_entry["request_id"] = record.request_id
         if hasattr(record, "method"):
             log_entry["method"] = record.method
@@ -36,6 +79,18 @@ class JsonFormatter(logging.Formatter):
             log_entry["status_code"] = record.status_code
         if hasattr(record, "duration_ms"):
             log_entry["duration_ms"] = record.duration_ms
+
+        extra_context: Dict[str, Any] = {}
+        for key, value in record.__dict__.items():
+            if key in _RESERVED_LOG_RECORD_KEYS:
+                continue
+            if key in {"request_id", "method", "path", "status_code", "duration_ms"}:
+                continue
+            extra_context[key] = _to_json_safe(value)
+
+        if extra_context:
+            log_entry["context"] = extra_context
+
         return json.dumps(log_entry, ensure_ascii=False)
 
 

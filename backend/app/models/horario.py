@@ -18,6 +18,12 @@ class Horario(Base):
     # Relaciones
     curso_id = Column(Integer, ForeignKey("cursos.id"), nullable=False)
     docente_id = Column(Integer, ForeignKey("docentes.id"), nullable=True)
+    plantilla_bloque_id = Column(
+        Integer,
+        ForeignKey("plantilla_bloques.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     
     # Grupo y periodo
     grupo = Column(String(10), nullable=False)  # A, B, C, D
@@ -44,6 +50,7 @@ class Horario(Base):
     curso = relationship("Curso", back_populates="horarios")
     docente = relationship("Docente", back_populates="horarios")
     aula_obj = relationship("Aula", back_populates="horarios", foreign_keys=[aula_id])
+    plantilla_bloque = relationship("PlantillaBloque", back_populates="horarios")
     
     @property
     def dia_nombre(self) -> str:

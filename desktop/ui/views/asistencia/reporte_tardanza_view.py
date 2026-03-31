@@ -25,7 +25,8 @@ class ReporteTardanzaView(ctk.CTkFrame):
 
     def __init__(self, parent, auth_client=None):
         super().__init__(parent, fg_color="transparent")
-        self.controller = ReporteTardanzaController()
+        self._auth_token = auth_client.token if auth_client else ""
+        self.controller = None
 
         # Variables de control
         self.cargando = False
@@ -44,7 +45,36 @@ class ReporteTardanzaView(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(3, weight=1)  # Tabla expandible
 
+        self._ui_ready = False
+        self._loading_frame = None
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder inicial para render inmediato."""
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando reporte de tardanzas...",
+            font=ctk.CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye la vista completa después del primer paint."""
+        if self._ui_ready:
+            return
+
+        if self.controller is None:
+            self.controller = ReporteTardanzaController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+
         self.create_widgets()
+        self._ui_ready = True
 
     def create_widgets(self):
         # ============================
@@ -845,6 +875,8 @@ class ReporteTardanzaView(ctk.CTkFrame):
 
     def exportar_csv(self):
         """Exportar resultados a CSV"""
+        if not self._ui_ready:
+            return
         # Obtener todos los datos del rango actual
         params = {
             "inicio": self.ent_desde.get(),
@@ -894,3 +926,13 @@ class ReporteTardanzaView(ctk.CTkFrame):
 
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el archivo: {e}")
+
+    def on_show(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        self.on_hide()

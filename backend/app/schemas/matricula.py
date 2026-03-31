@@ -51,3 +51,20 @@ class MatriculaConAlumno(MatriculaResponse):
     """Esquema con datos del alumno incluidos."""
     alumno_nombre: Optional[str] = None
     alumno_dni: Optional[str] = None
+
+class MatriculaListItem(BaseModel):
+    """Esquema reducido para listados."""
+    id: int
+    alumno_id: int
+    periodo_id: int
+    codigo_matricula: str
+    estado: str
+    grupo: Optional[str] = None
+    carrera: Optional[str] = None
+    modalidad: Optional[str] = None
+    horario: Optional[str] = None
+    nivel: Optional[str] = None
+    grado: Optional[str] = None
+
+    class Config:
+        from_attributes = True

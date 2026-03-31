@@ -11,11 +11,15 @@ Flujo:
 import customtkinter as ctk
 from tkinter import messagebox
 from typing import List, Dict, Optional
+import threading
 
 from controllers.docentes_controller import DocentesController
 from controllers.academico_controller import AcademicoController
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 # ── Colores por nombre de curso ──────────────────────────────────────────────
@@ -42,9 +46,9 @@ class AsignarCursoView(ctk.CTkFrame):
     def __init__(self, parent, auth_client=None):
         super().__init__(parent, fg_color="transparent")
 
-        token = auth_client.token if auth_client else ""
-        self.docentes_ctrl  = DocentesController(token)
-        self.academico_ctrl = AcademicoController(token)
+        self._auth_token = auth_client.token if auth_client else ""
+        self.docentes_ctrl = None
+        self.academico_ctrl = None
 
         # Estado
         self.docente_activo: Optional[Dict] = None      # docente seleccionado
@@ -53,18 +57,51 @@ class AsignarCursoView(ctk.CTkFrame):
         self._color_cache:   Dict[str, str] = {}          # cache colores por nombre
         self._item_disp:     Optional[Dict] = None        # ítem selec. en lista Disponibles
         self._item_asig:     Optional[Dict] = None        # ítem selec. en lista Asignados
+        self._docentes_request_id = 0
+        self._catalogo_request_id = 0
+        self._cursos_docente_request_id = 0
+        self._debounce_id = None
+        self._ui_ready = False
+        self._loading_frame = None
 
         # Layout: 30% docentes | 70% asignador
         self.grid_columnconfigure(0, weight=3, minsize=300)
         self.grid_columnconfigure(1, weight=7)
         self.grid_rowconfigure(0, weight=1)
 
+        self._show_loading_state()
+        self.after(1, self._build_ui_deferred)
+
+    def _show_loading_state(self):
+        """Placeholder de carga inicial para evitar bloqueo en primer render."""
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="Cargando asignacion de cursos...",
+            font=ctk.CTkFont(family="Roboto", size=14, weight="bold"),
+            text_color=TM.text_secondary(),
+        ).pack(expand=True)
+
+    def _build_ui_deferred(self):
+        """Construye UI y arranca carga de datos fuera del constructor."""
+        if self._ui_ready:
+            return
+
+        # Inicializacion perezosa de controladores para acelerar primer show_view.
+        if self.docentes_ctrl is None:
+            self.docentes_ctrl = DocentesController(self._auth_token)
+        if self.academico_ctrl is None:
+            self.academico_ctrl = AcademicoController(self._auth_token)
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+
         self._build_panel_docentes()
         self._build_panel_asignador()
-
-        # Carga inicial
-        self._cargar_cursos_api()
-        self._cargar_docentes()
+        self._cargar_inicial_async()
+        self._ui_ready = True
 
     # =========================================================================
     # PANEL IZQUIERDO: LISTA DE DOCENTES
@@ -357,17 +394,87 @@ class AsignarCursoView(ctk.CTkFrame):
     # =========================================================================
     # CARGA DE DATOS DESDE API
     # =========================================================================
-    def _cargar_cursos_api(self):
-        """Obtiene todos los cursos desde la API (misma fuente que cursos_view)."""
-        self.cursos_api = self.academico_ctrl.obtener_catalogo()
+    def _cargar_inicial_async(self):
+        """Carga cursos y docentes en un solo hilo background."""
+        self._docentes_request_id += 1
+        docentes_req_id = self._docentes_request_id
+        self._catalogo_request_id += 1
+        catalogo_req_id = self._catalogo_request_id
 
-    def _cargar_docentes(self):
-        """Carga y pinta la lista de docentes."""
+        # Mostrar loading en la lista de docentes
         for w in self.scroll_doc.winfo_children():
             w.destroy()
+        ctk.CTkLabel(
+            self.scroll_doc,
+            text="⏳ Cargando...",
+            font=ctk.CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        ).pack(pady=20)
+
+        def _hilo():
+            cursos = self.academico_ctrl.obtener_catalogo()
+            criterio = ""
+            try:
+                criterio = self.entry_buscar.get().strip()
+            except Exception:
+                pass
+            docentes = self.docentes_ctrl.obtener_docentes(criterio, "activos")
+            if (
+                self.winfo_exists()
+                and docentes_req_id == self._docentes_request_id
+                and catalogo_req_id == self._catalogo_request_id
+            ):
+                self.after(0, lambda: self._aplicar_carga_inicial(cursos, docentes))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_carga_inicial(self, cursos, docentes):
+        if not self.winfo_exists():
+            return
+        self.cursos_api = cursos
+        self._pintar_docentes(docentes)
+
+    def _cargar_cursos_api(self):
+        """Obtiene todos los cursos desde la API (background)."""
+        self._catalogo_request_id += 1
+        req_id = self._catalogo_request_id
+
+        def _hilo():
+            cursos = self.academico_ctrl.obtener_catalogo()
+            if self.winfo_exists() and req_id == self._catalogo_request_id:
+                self.after(0, lambda: setattr(self, 'cursos_api', cursos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _cargar_docentes(self):
+        """Carga la lista de docentes en background."""
+        self._docentes_request_id += 1
+        req_id = self._docentes_request_id
+
+        for w in self.scroll_doc.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self.scroll_doc,
+            text="⏳ Cargando docentes...",
+            font=ctk.CTkFont(family="Roboto", size=11),
+            text_color=TM.text_secondary()
+        ).pack(pady=20)
 
         criterio = self.entry_buscar.get().strip()
-        docentes = self.docentes_ctrl.obtener_docentes(criterio, "activos")
+
+        def _hilo():
+            docentes = self.docentes_ctrl.obtener_docentes(criterio, "activos")
+            if self.winfo_exists() and req_id == self._docentes_request_id:
+                self.after(0, lambda: self._pintar_docentes(docentes))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _pintar_docentes(self, docentes):
+        """Renderizar lista de docentes en el hilo principal."""
+        if not self.winfo_exists():
+            return
+        for w in self.scroll_doc.winfo_children():
+            w.destroy()
 
         if not docentes:
             ctk.CTkLabel(
@@ -383,7 +490,23 @@ class AsignarCursoView(ctk.CTkFrame):
         self.lbl_total_doc.configure(text=f"{len(docentes)} docente(s)")
 
     def _filtrar_docentes(self):
-        self._cargar_docentes()
+        # Debounce 400ms
+        if self._debounce_id:
+            self.after_cancel(self._debounce_id)
+        self._debounce_id = self.after(400, self._cargar_docentes)
+
+    # ── Lifecycle ──
+    def on_show(self):
+        if not self._ui_ready:
+            self.after(1, self._build_ui_deferred)
+
+    def on_hide(self):
+        if self._debounce_id:
+            self.after_cancel(self._debounce_id)
+            self._debounce_id = None
+
+    def cleanup(self):
+        self.on_hide()
 
     # =========================================================================
     # CARD DE DOCENTE EN LA LISTA IZQUIERDA
@@ -465,16 +588,40 @@ class AsignarCursoView(ctk.CTkFrame):
         self._item_disp      = None
         self._item_asig      = None
 
-        # Cargar cursos ya asignados al docente
-        self.cursos_asig = self._obtener_cursos_docente(data)
-
-        # Actualizar panel derecho
+        # Actualizar panel derecho inmediatamente
         self._actualizar_datos_header()
         self._mostrar_asignador()
-        self._rebuild_listas()
 
-        # Refrescar lista izquierda para marcar seleccionado
+        # Refrescar lista izquierda (marca al seleccionado)
         self._cargar_docentes()
+
+        # Cargar cursos asignados en background
+        self._cursos_docente_request_id += 1
+        req_id = self._cursos_docente_request_id
+        docente_id = data.get("id")
+
+        def _hilo():
+            cursos = []
+            if docente_id:
+                cursos_raw = self.docentes_ctrl.obtener_cursos_docente(docente_id)
+                cursos = [
+                    {
+                        "id": c.get("id"),
+                        "nombre": c.get("nombre", ""),
+                        "descripcion": c.get("descripcion", ""),
+                    }
+                    for c in cursos_raw
+                ]
+            if self.winfo_exists() and req_id == self._cursos_docente_request_id:
+                self.after(0, lambda: self._aplicar_cursos_docente(cursos))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_cursos_docente(self, cursos):
+        if not self.winfo_exists():
+            return
+        self.cursos_asig = cursos
+        self._rebuild_listas()
 
     def _obtener_cursos_docente(self, data: Dict) -> List[Dict]:
         """
@@ -485,10 +632,8 @@ class AsignarCursoView(ctk.CTkFrame):
         if not docente_id:
             return []
 
-        # Llamar al controlador para obtener cursos desde la API
         cursos = self.docentes_ctrl.obtener_cursos_docente(docente_id)
 
-        # Asegurar que cada curso tenga al menos id y nombre
         return [
             {
                 "id": c.get("id"),

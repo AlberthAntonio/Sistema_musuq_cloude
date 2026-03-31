@@ -11,13 +11,13 @@ from app.schemas.auth import (
 # Alumno
 from app.schemas.alumno import (
     AlumnoBase, AlumnoCreate, AlumnoUpdate, 
-    AlumnoResponse, AlumnoResumen
+    AlumnoResponse, AlumnoResumen, AlumnoListItem
 )
 
 # Asistencia
 from app.schemas.asistencia import (
     AsistenciaBase, AsistenciaCreate, AsistenciaUpdate,
-    AsistenciaResponse, AsistenciaMasiva, AsistenciaReporte
+    AsistenciaResponse, AsistenciaListItem, AsistenciaMasiva, AsistenciaReporte
 )
 
 # Curso
@@ -46,6 +46,14 @@ from app.schemas.evento import (
 from app.schemas.horario import (
     HorarioBase, HorarioCreate, HorarioUpdate,
     HorarioResponse, HorarioCompleto
+)
+
+# Plantillas de Horario
+from app.schemas.plantilla_horario import (
+    PlantillaHorarioBase, PlantillaHorarioCreate, PlantillaHorarioUpdate, PlantillaHorarioResponse,
+    PlantillaBloqueBase, PlantillaBloqueCreate, PlantillaBloqueUpdate, PlantillaBloqueResponse,
+    PlantillaBloqueBatchItem, PlantillaBloqueBatchUpsertRequest, PlantillaBloqueBatchUpsertResponse,
+    GrillaBloqueItem, PlantillaGrillaFinalResponse,
 )
 
 # Lista

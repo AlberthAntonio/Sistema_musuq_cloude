@@ -29,6 +29,8 @@ class ReporteService:
         periodo_id: Optional[int] = None,
         grupo: Optional[str] = None,
         modalidad: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """
         Lista alumnos con saldo pendiente > 0.
@@ -79,6 +81,8 @@ class ReporteService:
                 (func.sum(ObligacionPago.monto_total) - func.sum(ObligacionPago.monto_pagado)) > 0
             )
             .order_by(Alumno.apell_paterno, Alumno.apell_materno)
+            .offset(skip)
+            .limit(limit)
         )
 
         resultados = query.all()
@@ -110,6 +114,9 @@ class ReporteService:
         grupo: Optional[str] = None,
         fecha_inicio: Optional[date] = None,
         fecha_fin: Optional[date] = None,
+        mes: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """
         Resumen de asistencia por alumno: conteos de puntual/tardanza/falta y porcentaje.
@@ -148,12 +155,14 @@ class ReporteService:
             query = query.filter(Asistencia.fecha >= fecha_inicio)
         if fecha_fin:
             query = query.filter(Asistencia.fecha <= fecha_fin)
+        if mes:
+            query = query.filter(func.extract("month", Asistencia.fecha) == mes)
 
         query = query.group_by(
             Alumno.id, Alumno.dni, Alumno.nombres,
             Alumno.apell_paterno, Alumno.apell_materno,
             Matricula.codigo_matricula, Matricula.grupo,
-        ).order_by(Alumno.apell_paterno, Alumno.apell_materno)
+        ).order_by(Alumno.apell_paterno, Alumno.apell_materno).offset(skip).limit(limit)
 
         resultados = query.all()
         resultado_final = []
@@ -189,6 +198,8 @@ class ReporteService:
         grupo: Optional[str] = None,
         turno: Optional[str] = None,
         periodo_id: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """
         Lista todos los registros de TARDANZA en el rango dado.
@@ -233,7 +244,7 @@ class ReporteService:
         if periodo_id:
             query = query.filter(Asistencia.periodo_id == periodo_id)
 
-        query = query.order_by(Asistencia.fecha.desc(), Alumno.apell_paterno)
+        query = query.order_by(Asistencia.fecha.desc(), Alumno.apell_paterno).offset(skip).limit(limit)
         resultados = query.all()
 
         return [

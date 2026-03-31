@@ -9,26 +9,19 @@ import customtkinter as ctk
 from tkinter import messagebox, filedialog
 from customtkinter import CTkFont
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import webbrowser
 import os
 import math
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from controllers.pagos_controller import PagosController
 from styles import tabla_style as st
 from core.theme_manager import ThemeManager as TM
+from utils.perf_utils import get_logger
 
-# --- IMPORTACIONES PARA PDF (REPORTLAB) ---
-try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.units import cm
-    HAS_REPORTLAB = True
-except ImportError:
-    HAS_REPORTLAB = False
+logger = get_logger(__name__)
 
 
 class DeudoresView(ctk.CTkFrame):
@@ -45,7 +38,9 @@ class DeudoresView(ctk.CTkFrame):
             raise ValueError("auth_client es requerido para inicializar DeudoresView")
 
         self.auth_client = auth_client
-        self.controller = PagosController(auth_client.token)
+        self._auth_token = auth_client.token
+        self.controller: Optional[PagosController] = None
+        self._controller_lock = threading.Lock()
 
         # --- CONFIGURACIÓN HÍBRIDA (CEREBRO) ---
         self.data_total = []        # Base de datos completa en RAM
@@ -78,11 +73,30 @@ class DeudoresView(ctk.CTkFrame):
             'estado': 130      # +10 (antes 120)
         }
 
+        self._ui_creada = False
+        self._carga_inicial_disparada = False
+
+        # Diferimos la construcción pesada para reducir latencia en show_view.
+        self.after_idle(self._crear_ui_diferida)
+
+    def _get_controller(self) -> PagosController:
+        if self.controller is None:
+            with self._controller_lock:
+                if self.controller is None:
+                    self.controller = PagosController(self._auth_token)
+        return self.controller
+
+    def _crear_ui_diferida(self):
+        if self._ui_creada or not self.winfo_exists():
+            return
         self.crear_ui()
-        self.cargar_datos()
+        self._ui_creada = True
 
     def crear_ui(self):
         """Crear interfaz completa"""
+        if self._ui_creada:
+            return
+
         # Grid layout
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -92,6 +106,9 @@ class DeudoresView(ctk.CTkFrame):
 
         # 2. Tabla
         self._crear_tabla()
+
+        # Iniciar carga inicial cuando filtros y tabla (incluyendo lbl_loading) ya existen.
+        self._cargar_filtros_y_datos_async()
 
         # 3. Footer con paginación y acciones
         self._crear_footer()
@@ -143,11 +160,9 @@ class DeudoresView(ctk.CTkFrame):
         self._crear_filtros(left_side)
 
     def _crear_filtros(self, parent):
-        """Crear filtros de grupo y modalidad"""
+        """Crear filtros de grupo y modalidad (async)"""
         filtros_row = ctk.CTkFrame(parent, fg_color="transparent")
         filtros_row.pack(anchor="w")
-
-        grupos, modalidades = self.controller.obtener_filtros_disponibles()
 
         # Filtro Grupo
         ctk.CTkLabel(
@@ -159,7 +174,7 @@ class DeudoresView(ctk.CTkFrame):
 
         self.cb_grupo = ctk.CTkComboBox(
             filtros_row,
-            values=["Todos"] + grupos,
+            values=["Cargando..."],
             width=110,
             height=35,
             command=self.cargar_datos,
@@ -184,7 +199,7 @@ class DeudoresView(ctk.CTkFrame):
 
         self.cb_modalidad = ctk.CTkComboBox(
             filtros_row,
-            values=["Todas"] + modalidades,
+            values=["Cargando..."],
             width=150,
             height=35,
             command=self.cargar_datos,
@@ -198,6 +213,9 @@ class DeudoresView(ctk.CTkFrame):
             font=CTkFont(family="Roboto", size=11)
         )
         self.cb_modalidad.pack(side="left")
+
+        # La carga inicial se dispara al final de crear_ui() para evitar
+        # usar widgets de la tabla antes de que existan.
 
     def _crear_kpi_deuda(self, parent):
         """Crear KPI de deuda total - título arriba, icono y monto abajo"""
@@ -405,6 +423,38 @@ class DeudoresView(ctk.CTkFrame):
     # LÓGICA DE CARGA DE DATOS
     # ========================================================
 
+    def _cargar_filtros_y_datos_async(self):
+        """Carga filtros y datos iniciales en un solo hilo."""
+        if self._carga_inicial_disparada:
+            return
+
+        self._carga_inicial_disparada = True
+        self.lbl_loading.pack(pady=20)
+
+        def _hilo():
+            controller = self._get_controller()
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                filtros_fut = executor.submit(controller.obtener_filtros_disponibles)
+                deudores_fut = executor.submit(controller.obtener_lista_deudores, "Todos", "Todas")
+
+                grupos, modalidades = filtros_fut.result()
+                datos = deudores_fut.result()
+
+            total = sum(d["deuda"] for d in datos)
+            if self.winfo_exists():
+                self.after(0, lambda: self._aplicar_filtros_y_datos(grupos, modalidades, datos, total))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_filtros_y_datos(self, grupos, modalidades, datos, total):
+        if not self.winfo_exists():
+            return
+        self.cb_grupo.configure(values=["Todos"] + grupos)
+        self.cb_grupo.set("Todos")
+        self.cb_modalidad.configure(values=["Todas"] + modalidades)
+        self.cb_modalidad.set("Todas")
+        self._finalizar_carga(datos, total)
+
     def cargar_datos(self, event=None):
         """Cargar datos en segundo plano"""
         self.lbl_loading.pack(pady=20)
@@ -417,6 +467,10 @@ class DeudoresView(ctk.CTkFrame):
         g = self.cb_grupo.get()
         m = self.cb_modalidad.get()
 
+        # Evitar cargar con filtros placeholder
+        if g == "Cargando..." or m == "Cargando...":
+            return
+
         threading.Thread(
             target=self._proceso_en_segundo_plano,
             args=(g, m),
@@ -425,7 +479,8 @@ class DeudoresView(ctk.CTkFrame):
 
     def _proceso_en_segundo_plano(self, grupo, modalidad):
         """Proceso de carga en thread separado"""
-        datos = self.controller.obtener_lista_deudores(grupo, modalidad)
+        controller = self._get_controller()
+        datos = controller.obtener_lista_deudores(grupo, modalidad)
         total = sum(d["deuda"] for d in datos)
         self.after(0, lambda: self._finalizar_carga(datos, total))
 
@@ -635,7 +690,13 @@ class DeudoresView(ctk.CTkFrame):
 
     def imprimir_reporte(self):
         """Generar e imprimir reporte PDF"""
-        if not HAS_REPORTLAB:
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib import colors
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib.units import cm
+        except ImportError:
             messagebox.showerror(
                 "Error",
                 "ReportLab no está instalado.\nNo se puede generar PDF."
@@ -728,3 +789,13 @@ class DeudoresView(ctk.CTkFrame):
 
         except Exception as e:
             messagebox.showerror("Error", f"Error al crear el PDF:\n{str(e)}")
+
+    # ── Lifecycle ──
+    def on_show(self):
+        pass
+
+    def on_hide(self):
+        pass
+
+    def cleanup(self):
+        pass

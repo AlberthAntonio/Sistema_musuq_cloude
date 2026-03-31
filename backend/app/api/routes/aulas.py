@@ -2,7 +2,7 @@
 Rutas CRUD para aulas.
 """
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -55,13 +55,25 @@ async def obtener_aula(
 @router.get("/{aula_id}/horarios")
 async def obtener_horarios_de_aula(
     aula_id: int,
+    response: Response,
     periodo: Optional[str] = Query(None, description="Filtrar por periodo, ej. 2026-I"),
+    grupo: Optional[str] = Query(None, description="Filtrar por grupo"),
+    turno: Optional[str] = Query(None, description="Filtrar por turno"),
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(get_current_user)
 ):
     """Obtener bloques horarios asociados al aula usando la columna horarios.aula."""
     try:
-        return aula_service.obtener_horarios_aula(db, aula_id, periodo)
+        horarios, mode, reason = aula_service.obtener_horarios_aula_con_modo(
+            db,
+            aula_id,
+            periodo,
+            grupo,
+            turno,
+        )
+        response.headers["X-Horarios-Mode"] = mode
+        response.headers["X-Horarios-Rollout-Reason"] = reason
+        return horarios
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

@@ -1,10 +1,15 @@
 import os
 from typing import List, Dict, Tuple
 from datetime import date, datetime
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import cm
-from reportlab.lib import colors
+
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    HAS_REPORTLAB = True
+except ImportError:
+    HAS_REPORTLAB = False
 
 from core.api_client import AlumnoClient
 
@@ -61,6 +66,12 @@ class ConstanciaController:
 
     def generar_constancia_pdf(self, tipo_documento: str, alumno: AlumnoDTO, opciones: Dict) -> Tuple[bool, str]:
         """Genera el PDF de la constancia seleccionada"""
+
+        if not HAS_REPORTLAB:
+            return (
+                False,
+                "Falta la dependencia 'reportlab'. Instale con: pip install reportlab",
+            )
         
         try:
             filename = f"Constancia_{alumno.dni}_{date.today().strftime('%Y%m%d_%H%M%S')}.pdf"

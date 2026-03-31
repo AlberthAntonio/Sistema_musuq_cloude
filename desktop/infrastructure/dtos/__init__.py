@@ -49,6 +49,7 @@ class AlumnoDTO:
     grupo: str
     modalidad: str
     horario: str
+    tiene_foto: bool = False
     activo: bool = True
     
     @classmethod
@@ -86,6 +87,7 @@ class AlumnoDTO:
             grupo=data.get("grupo", ""),
             modalidad=data.get("modalidad", ""),
             horario=data.get("horario", ""),
+            tiene_foto=data.get("tiene_foto", False),
             activo=data.get("activo", True)
         )
     
@@ -114,6 +116,7 @@ class AlumnoDTO:
             "grupo": self.grupo,
             "modalidad": self.modalidad,
             "horario": self.horario,
+            "tiene_foto": self.tiene_foto,
             "activo": self.activo
         }
     

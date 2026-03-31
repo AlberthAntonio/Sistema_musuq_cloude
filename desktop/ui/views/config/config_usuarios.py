@@ -5,10 +5,14 @@ Refactor visual usando ThemeManager (TM), conectado a la API del backend.
 
 import customtkinter as ctk
 from tkinter import messagebox
+import threading
 
 import styles.tabla_style as st
 from core.theme_manager import TM
 from core.api_client import UsuariosClient
+from utils.perf_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class ConfigUsuariosView(ctk.CTkFrame):
@@ -22,6 +26,8 @@ class ConfigUsuariosView(ctk.CTkFrame):
         self.usuario_seleccionado_id = None   # ID numérico del usuario en el backend
         self.modo_edicion = False
         self._usuarios_cache: list = []       # Caché de usuarios cargados desde la API
+        self._request_id = 0
+        self._debounce_id = None
 
         # Layout: 40% lista, 60% formulario
         self.grid_columnconfigure(0, weight=4)
@@ -97,8 +103,8 @@ class ConfigUsuariosView(ctk.CTkFrame):
         )
         self.scroll_usuarios.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
-        # Cargar usuarios desde la API
-        self.cargar_usuarios_desde_api()
+        # Cargar usuarios desde la API (async)
+        self._cargar_usuarios_async()
 
         # Footer con estadísticas
         fr_stats = ctk.CTkFrame(
@@ -504,13 +510,35 @@ class ConfigUsuariosView(ctk.CTkFrame):
         texto_permisos = permisos.get(rol_seleccionado, "Seleccione un rol")
         self.lbl_permisos.configure(text=texto_permisos)
 
-    def cargar_usuarios_desde_api(self, criterio: str = ""):
-        """Carga usuarios reales desde la API del backend"""
-        # Limpiar scroll actual
+    def _cargar_usuarios_async(self, criterio: str = ""):
+        """Carga usuarios en background thread."""
+        self._request_id += 1
+        req_id = self._request_id
+
+        # Limpiar y mostrar loading
+        for widget in self.scroll_usuarios.winfo_children():
+            widget.destroy()
+        ctk.CTkLabel(
+            self.scroll_usuarios,
+            text="⏳ Cargando usuarios...",
+            font=("Roboto", 11),
+            text_color=TM.text_secondary()
+        ).pack(pady=20)
+
+        def _hilo():
+            success, result = self.client.obtener_todos(limit=500)
+            if self.winfo_exists() and req_id == self._request_id:
+                self.after(0, lambda: self._aplicar_usuarios(success, result, criterio))
+
+        threading.Thread(target=_hilo, daemon=True).start()
+
+    def _aplicar_usuarios(self, success, result, criterio):
+        if not self.winfo_exists():
+            return
+
         for widget in self.scroll_usuarios.winfo_children():
             widget.destroy()
 
-        success, result = self.client.obtener_todos(limit=500)
         if not success:
             ctk.CTkLabel(
                 self.scroll_usuarios,
@@ -522,7 +550,6 @@ class ConfigUsuariosView(ctk.CTkFrame):
         usuarios = result if isinstance(result, list) else result.get("items", [])
         self._usuarios_cache = usuarios
 
-        # Filtrar si hay criterio
         if criterio:
             c = criterio.lower()
             usuarios = [
@@ -556,9 +583,13 @@ class ConfigUsuariosView(ctk.CTkFrame):
             activo = u.get("activo", True)
             self.crear_item_usuario(uid, username, nombre, rol, activo)
 
+    def cargar_usuarios_desde_api(self, criterio: str = ""):
+        """Public method - delegates to async."""
+        self._cargar_usuarios_async(criterio)
+
     def cargar_usuarios_dummy(self):
         """[Compatibilidad] Llama a la carga real desde API"""
-        self.cargar_usuarios_desde_api()
+        self._cargar_usuarios_async()
 
     # =================== MÉTODOS DE LÓGICA ===================
 
@@ -732,6 +763,50 @@ class ConfigUsuariosView(ctk.CTkFrame):
                 messagebox.showerror("❌ Error", f"No se pudo eliminar:\n{error}")
 
     def buscar_usuario(self, event):
-        """Filtrar lista de usuarios desde el caché local"""
-        criterio = self.entry_buscar.get().strip()
-        self.cargar_usuarios_desde_api(criterio)
+        """Filtrar lista de usuarios con debounce."""
+        if self._debounce_id:
+            self.after_cancel(self._debounce_id)
+
+        def _buscar():
+            criterio = self.entry_buscar.get().strip()
+            # Filtrar desde cache local sin roundtrip
+            if self._usuarios_cache:
+                for widget in self.scroll_usuarios.winfo_children():
+                    widget.destroy()
+
+                c = criterio.lower()
+                usuarios = [
+                    u for u in self._usuarios_cache
+                    if not c or c in u.get("username", "").lower()
+                    or c in (u.get("nombre_completo") or u.get("username", "")).lower()
+                ]
+
+                ROL_MAP = {
+                    "admin": "Admin", "secretaria": "Secretaria",
+                    "docente": "Docente", "contador": "Contador",
+                    "visualizador": "Visualizador",
+                }
+
+                for u in usuarios:
+                    uid = u.get("id")
+                    username = u.get("username", "")
+                    nombre = u.get("nombre_completo") or username
+                    rol = ROL_MAP.get(u.get("rol", "").lower(), u.get("rol", "?"))
+                    activo = u.get("activo", True)
+                    self.crear_item_usuario(uid, username, nombre, rol, activo)
+            else:
+                self._cargar_usuarios_async(criterio)
+
+        self._debounce_id = self.after(300, _buscar)
+
+    # ── Lifecycle ──
+    def on_show(self):
+        pass
+
+    def on_hide(self):
+        if self._debounce_id:
+            self.after_cancel(self._debounce_id)
+            self._debounce_id = None
+
+    def cleanup(self):
+        self.on_hide()

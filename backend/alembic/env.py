@@ -18,7 +18,8 @@ from app.db.database import Base  # noqa: E402
 from app.models import (  # noqa: E402, F401
     Usuario, Alumno, Asistencia, Curso, MallaCurricular,
     Aula, AulaGrupo, AulaCurso,
-    Docente, DocenteCurso, Horario, EventoCalendario, ListaGuardada,
+    Docente, DocenteCurso, Horario, PlantillaHorario, PlantillaBloque,
+    EventoCalendario, ListaGuardada,
     SesionExamen, Nota,
     PeriodoAcademico, Matricula, ObligacionPago, Pago
 )

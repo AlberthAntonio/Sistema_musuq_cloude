@@ -2,11 +2,7 @@ import os
 import threading
 from typing import List, Tuple, Dict
 from datetime import datetime
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import cm
-from reportlab.lib import colors
-from reportlab.platypus import Table, TableStyle
+import importlib
 
 from core.api_client import AlumnoClient, ListasClient
 
@@ -31,6 +27,26 @@ class ReporteController:
     def __init__(self):
         self.client = AlumnoClient()
         self.listas_client = ListasClient()
+
+    def _cargar_reportlab(self):
+        """Carga símbolos de reportlab bajo demanda para evitar crash al importar el módulo."""
+        try:
+            pagesizes = importlib.import_module("reportlab.lib.pagesizes")
+            pdfgen_canvas = importlib.import_module("reportlab.pdfgen.canvas")
+            units = importlib.import_module("reportlab.lib.units")
+            colors_mod = importlib.import_module("reportlab.lib.colors")
+            platypus = importlib.import_module("reportlab.platypus")
+            return {
+                "A4": pagesizes.A4,
+                "landscape": pagesizes.landscape,
+                "canvas": pdfgen_canvas,
+                "cm": units.cm,
+                "colors": colors_mod,
+                "Table": platypus.Table,
+                "TableStyle": platypus.TableStyle,
+            }
+        except ImportError:
+            return None
 
     def obtener_filtros_disponibles(self):
         """
@@ -78,6 +94,18 @@ class ReporteController:
         return alumnos_dto
 
     def generar_reporte_pdf(self, ids_alumnos, tipo_reporte, titulo_personalizado):
+        reportlab = self._cargar_reportlab()
+        if reportlab is None:
+            return False, "Falta la dependencia 'reportlab'. Instale con: pip install reportlab"
+
+        A4 = reportlab["A4"]
+        landscape = reportlab["landscape"]
+        canvas = reportlab["canvas"]
+        cm = reportlab["cm"]
+        colors = reportlab["colors"]
+        Table = reportlab["Table"]
+        TableStyle = reportlab["TableStyle"]
+
         if not ids_alumnos:
             return False, "No hay alumnos seleccionados."
             

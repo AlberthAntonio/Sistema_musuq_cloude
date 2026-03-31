@@ -17,6 +17,8 @@ from app.services.sesion_service import sesion_service, SesionService
 from app.services.periodo_service import periodo_service, PeriodoService
 from app.services.matricula_service import matricula_service, MatriculaService
 from app.services.obligacion_service import obligacion_service, ObligacionService
+from app.services.plantilla_horario_service import plantilla_horario_service, PlantillaHorarioService
+from app.services.backfill_horarios_service import backfill_horarios_to_plantillas
 
 __all__ = [
     "alumno_service", "AlumnoService",
@@ -35,4 +37,6 @@ __all__ = [
     "periodo_service", "PeriodoService",
     "matricula_service", "MatriculaService",
     "obligacion_service", "ObligacionService",
+    "plantilla_horario_service", "PlantillaHorarioService",
+    "backfill_horarios_to_plantillas",
 ]
